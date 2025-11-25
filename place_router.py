@@ -1,8 +1,18 @@
-def area_partition():
+import math
+
+def area_partition(num_of_cores):
     """
     把面積分割成 1:1 or 1:2
+    nums_of_cores: 現在的core數量
+    目標是把現在的core數量減半 並切割原本的面積為對半
     """
-    pass
+    divide_cores = int(num_of_cores/2)
+    divide_level = int(math.log2(divide_cores))
+    if divide_level % 2 ==0:
+        return (1, 1) # 原面積垂直切割成一半
+    else:
+        return (1, 2) # 原面積水平切割成一半
+    
 
 def find_distance():
     """
@@ -17,7 +27,7 @@ def place_the_router():
     pass
 
 def main():
-    pass
+    print(area_partition(16))
 
 if __name__ == '__main__':
     main()
