@@ -56,7 +56,7 @@ def assign_router(num_cores):
 
 
 def main():
-    num_cores = 4
+    num_cores = 16
     router_map = assign_router(num_cores)
  
     # 反向建立 core → router
