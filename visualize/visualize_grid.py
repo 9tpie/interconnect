@@ -47,5 +47,4 @@ def visualize_grid(grid: Grid, show_values: bool = True):
     plt.title("Grid Visualization")
     plt.xlabel("X")
     plt.ylabel("Y")
-    plt.gca().invert_yaxis()  # 如果你想要 y=0 在上方，可以取消這行
     plt.show()
