@@ -64,22 +64,25 @@ def candidates_for_node(
     return cands
 
 
-def solve(num: int) -> Tuple[Dict[int, Node], object]:
-    # 1) area partition
+def solve(num: int) -> Dict[int, Node]:
+    # 1) area partition：grid + blocks
     grid, blocks = build_area_partition(num, leaf_area=4)
 
     # 2) layer distances
-    n_layers, dists = inter_layer_distances(num)  # length = n_layers-1（但最後一步我們改用 1）
+    n_layers, dists = inter_layer_distances(num)  # dists 長度 = n_layers-1
 
-    # ✅ 現在要放到 leaf：探索 1 ~ n_layers
-    max_layer_to_place = n_layers
+    # 我們要探索 1 ~ n-1 層（最後一層不放）
+    max_layer_to_place = n_layers - 1
+    if max_layer_to_place < 1:
+        raise RuntimeError("n_layers 太小，無法放置")
 
-    # 3) 決定要放哪些節點（存在於 blocks 且 layer <= n_layers）
+    # 3) 決定要放哪些 node（存在於 blocks 且 layer <= n-1）
+    #    用 heap 規則，同層由左到右，就是 node_id 遞增
     node_ids = sorted([nid for nid in blocks.keys() if node_layer(nid) <= max_layer_to_place])
     if 1 not in node_ids:
-        raise RuntimeError("blocks does not contain node1")
+        raise RuntimeError("blocks 沒有 node1")
 
-    # 4) 固定 node1 在 x=1, y=最上方
+    # 4) 固定 node1 在 (x=2, y=最上方)
     root_block = blocks[1]
     fixed_x = 1
     top_y = grid.height - 1
@@ -87,60 +90,71 @@ def solve(num: int) -> Tuple[Dict[int, Node], object]:
 
     if not in_block(root_block, fixed_x, top_y):
         raise RuntimeError(
-            f"node1 fixed ({fixed_x},{top_y}) not in its block "
+            f"node1 固定座標 ({fixed_x},{top_y}) 不在 node1 候選區域內："
             f"x={root_block.x0}~{root_block.x1}, y={root_block.y0}~{root_block.y1}"
         )
     if grid.is_used(*root_xy):
-        raise RuntimeError(f"node1 fixed ({fixed_x},{top_y}) already used")
+        raise RuntimeError(f"node1 固定座標 ({fixed_x},{top_y}) 已被佔用")
 
-    placed: Dict[int, Node] = {1: place_node_at(grid, 1, router_id=1, core_id=-1, xy=root_xy)}
+    placed: Dict[int, Node] = {}
+    placed[1] = place_node_at(grid, node_id=1, router_id=1, core_id=-1, xy=root_xy)
 
-    # 5) 放置順序：id 遞增（排除 node1）
+    # 5) 建立待放清單（排除 root）
     order = [nid for nid in node_ids if nid != 1]
 
     # 6) 回朔 DFS
     def dfs(idx: int) -> bool:
+        # 全部放完
         if idx == len(order):
             return True
 
         nid = order[idx]
         lyr = node_layer(nid)
 
+        # 父節點必須已放好（heap tree）
         pid = parent_id(nid)
         if pid not in placed:
-            return False  # 理論上不會發生（因為上層 id 較小會先放）
-
-        pxy = (placed[pid].x, placed[pid].y)
-
-        # ✅ 距離規則：
-        # - 若 nid 在 leaf 層 (layer == n_layers)，則父子距離固定為 1
-        # - 否則用 level_dist 的相鄰層距離：Layer(lyr-1)->Layer(lyr) = dists[lyr-2]
-        if lyr == n_layers:
-            target_dist = 1
-        else:
-            target_dist = dists[lyr - 2]
-
-        cands = candidates_for_node(grid, blocks, nid, pxy, target_dist)
-        if not cands:
+            # 正常情況不會發生（因為我們是由上到下放）
             return False
 
+        parent_xy = (placed[pid].x, placed[pid].y)
+
+        # layer(lyr-1) -> layer(lyr) 的距離：用 dists[lyr-2]
+        # 例：layer2 用 dists[0]
+        if lyr < 2:
+            raise RuntimeError("非 root 節點 layer 不可能 < 2")
+        target_dist = dists[lyr - 2]
+
+        # 產生所有候選座標
+        cands = candidates_for_node(grid, blocks, nid, parent_xy, target_dist)
+        if not cands:
+            return False  # 無解，回朔上一層
+
+        # 逐一嘗試候選座標
         for xy in cands:
-            placed[nid] = place_node_at(grid, nid, router_id=nid, core_id=-1, xy=xy)
+            # 放
+            placed[nid] = place_node_at(grid, node_id=nid, router_id=nid, core_id=-1, xy=xy)
+
+            # 繼續下一個節點
             if dfs(idx + 1):
                 return True
+
+            # 失敗：回朔
             remove_node_at(grid, xy)
             del placed[nid]
 
         return False
 
-    if not dfs(0):
-        raise RuntimeError("找不到能讓 1~n 層（含 leaf）全部放置完成的解（已完整回朔）")
+    ok = dfs(0)
+    if not ok:
+        raise RuntimeError("找不到能讓 1~n-1 層全部放置完成的解（已完整回朔搜索）")
 
     return placed, grid
 
 
+
 def main():
-    num = int(input("輸入 num (2 的次方，例如 16/32): ").strip())
+    num = 16
 
     placed, grid = solve(num)
 
