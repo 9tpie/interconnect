@@ -1,4 +1,9 @@
 # main.py
+
+"""
+測試第一層到第二層探索
+"""
+
 from __future__ import annotations
 
 import math
