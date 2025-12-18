@@ -56,7 +56,7 @@ def assign_router(num_cores):
 
 
 def main():
-    num_cores = 16
+    num_cores = 8
     router_map = assign_router(num_cores)
  
     # 反向建立 core → router
@@ -65,10 +65,12 @@ def main():
         core_to_router[core] = rid
 
     # 依 core 順序輸出（core0 ~ core15）
+    router_to_core = {}
     for core in range(num_cores):
         addr = core_address(core, num_cores)
         if core in core_to_router:
             router = f"router{core_to_router[core]}"
+            
         else:
             router = "(no router)"
         
