@@ -18,7 +18,7 @@ def visualize_grid(grid: Grid, show_values: bool = True):
             val = grid.get(x, y)
 
             # 顏色：None = 空格 / 有值 = 占用
-            color = "#cccccc" if val is None else "#ff7777"
+            color = "#cccccc" if val is None else "#dbeafe"
 
             # rectangle = (x, y, width, height)
             rect = plt.Rectangle((x, y), 1, 1, facecolor=color, edgecolor='black')

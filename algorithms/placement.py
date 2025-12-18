@@ -172,7 +172,7 @@ def solve(num: int):
 
 
 def main():
-    num = 64
+    num = 32
 
     placed, grid = solve(num)
 
