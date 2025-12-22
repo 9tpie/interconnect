@@ -19,7 +19,7 @@ def main():
     print("placed nodes =", len(placed))
 
     # 可視化
-    # visualize_grid(grid)
+    visualize_grid(grid)
 
     #grid 資料結構
     print("\n=== Raw grid.cells (cells[x][y]) ===")

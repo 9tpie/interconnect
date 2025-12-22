@@ -169,5 +169,3 @@ def solve(num: int):
         raise RuntimeError("leaf 放置失敗（在 2×2 block 內找 dist[-1] 位置）")
 
     return placed, grid
-
-
