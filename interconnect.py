@@ -9,8 +9,10 @@ from algorithms import solve
 from algorithms import node_layer
 from algorithms import xy_route_by_coord
 from algorithms import yx_route_by_coord
+from algorithms import assign_router
 from data_structure import Node
-from visualize import visualize_grid
+from data_structure import Network
+from visualize import visualize_network
 
 def parent_child_pairs_by_level(num_nodes: int):
     """
@@ -96,6 +98,28 @@ def main():
     num = 16
     placed, grid = solve(num)
 
+    #建立router core配對結果
+    router_map = assign_router(num)
+    core_to_router = {}
+    for rid, core in router_map.items():
+        core_to_router[core] = rid
+
+    router_to_core = {rid: core for rid, core in router_map.items()}
+
+    #配對結果寫回placed中的Node
+    for rid, core in router_to_core.items():
+        if rid in placed:
+            placed[rid].core_id = core
+
+    #placed結果給network
+    k = int(math.log2(num))     # num = 2^k
+    W = 2 ** ((k + 1) // 2)     # ceil(k/2)
+    H = 2 ** (k // 2)           # floor(k/2)
+    network = Network(W, H)
+
+    for node in placed.values():
+        network.add_existing_node(node)
+
     print("\n\n")
     print("=== Placement Result (1 ~ n layers, leaf included) ===\n")
     for nid in sorted(placed.keys()):
@@ -112,7 +136,9 @@ def main():
         for (p, c), rec in routes[level].items():
             print(f"({p},{c})  XY={rec['XY']}  YX={rec['YX']}")
 
-    visualize_grid(grid)
+
+    visualize_network(network)
+
     
     
 

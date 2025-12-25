@@ -22,9 +22,15 @@ def visualize_network(network):
         label = f"R{node.router_id}\nC{node.core_id}"
         plt.text(node.x + 0.05, node.y + 0.05, label, fontsize=10)
 
-    plt.title("Network Topology Visualization")
+    ax = plt.gca()
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    plt.title("Network Topology Visualization", pad = 30)
     plt.xlabel("X")
     plt.ylabel("Y")
+    plt.xticks(range(network.width + 1))
+    plt.yticks(range(network.height + 1))
     plt.grid(True)
     plt.axis("equal")
     plt.savefig("topology.png")
