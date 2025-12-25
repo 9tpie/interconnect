@@ -17,7 +17,7 @@ class Network:
     def add_existing_node(self, node: Node):
         self.nodes.append(node)
 
-    def add_link(self, node_u: Node, node_v: Node, bandwidth: float) -> Link:
-        link = Link(node_u, node_v, bandwidth)
+    def add_link(self, node_u: Node, node_v: Node, bandwidth: float, color = "black") -> Link:
+        link = Link(node_u, node_v, bandwidth, color)
         self.links.append(link)
         return link

@@ -13,4 +13,5 @@ class Link:
     node_u: Node
     node_v: Node
     bandwidth: float
+    color: str = "black"
 

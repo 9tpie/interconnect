@@ -7,7 +7,7 @@ def visualize_network(network):
     for link in network.links:
         x_values = [link.node_u.x, link.node_v.x]
         y_values = [link.node_u.y, link.node_v.y]
-        plt.plot(x_values, y_values, linestyle='-', linewidth=2)
+        plt.plot(x_values, y_values, linestyle='-', linewidth=2, color=link.color)
 
         # 標示 bandwidth
         mid_x = (link.node_u.x + link.node_v.x) / 2
