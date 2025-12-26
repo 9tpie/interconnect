@@ -3,7 +3,7 @@
 """
 import math
 from collections import defaultdict
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, DefaultDict, Set, Optional
 
 from algorithms import solve
 from algorithms import node_layer
@@ -139,6 +139,66 @@ def add_last_level_routes_to_network(
 
             added.add(key)
 
+def add_unique_route_links_by_level(
+    net: Network,
+    routes: Dict[int, Dict[Tuple[int, int], dict]],
+    placed: Dict[int, "Node"],
+    bandwidth: float = 1.0,
+    dedup: bool = True,
+) -> Dict[int, List[Tuple[int, int]]]:
+    """
+    對每個 level 檢查 routes[level][(p,c)]:
+      若 XY == YX，視為唯一路徑，將該 router path 拆成相鄰邊並加入 Network.add_link()
+
+    回傳：
+      unique_edges_by_level[level] = [(u_router, v_router), ...]
+      （u_router, v_router 依 path 的方向；若你要無向可再自行正規化）
+    """
+
+    # router_id -> Node（用 placed 反建索引）
+    router_to_node: Dict[int, "Node"] = {}
+    for n in placed.values():
+        # 依你的資料，router 可能是 -1 表示沒有 router（例如 leaf/core）
+        if getattr(n, "router_id", -1) is not None and n.router_id >= 0:
+            router_to_node[n.router_id] = n
+
+    unique_edges_by_level: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
+
+    # 全域去重：避免不同 level / 不同 pair 重複加到同一條 link
+    seen_undirected: Set[Tuple[int, int]] = set()
+
+    for level in sorted(routes.keys()):
+        for (p, c), info in routes[level].items():
+            path_xy: List[int] = info.get("XY", [])
+            path_yx: List[int] = info.get("YX", [])
+
+            # 你的「唯一路徑」判斷：XY 與 YX 完全相同
+            if path_xy != path_yx:
+                continue
+
+            # path_xy 就是唯一路徑（router_id 序列）
+            path = path_xy
+            if len(path) < 2:
+                continue
+
+            # 拆成相鄰 router 邊：r0-r1, r1-r2, ...
+            for u, v in zip(path[:-1], path[1:]):
+                # 若其中一端找不到 router 對應的 Node，跳過（通常代表路徑穿過不存在的 router）
+                node_u = router_to_node.get(u)
+                node_v = router_to_node.get(v)
+                if node_u is None or node_v is None:
+                    continue
+
+                if dedup:
+                    key = (u, v) if u < v else (v, u)
+                    if key in seen_undirected:
+                        continue
+                    seen_undirected.add(key)
+
+                net.add_link(node_u, node_v, bandwidth)
+                unique_edges_by_level[level].append((u, v))
+
+    return unique_edges_by_level
 
 def main():
     num = 16
@@ -175,6 +235,15 @@ def main():
         use="XY"
     )
 
+    # 加入唯一路徑
+    unique_edges_by_level = add_unique_route_links_by_level(
+        net=network,
+        routes=routes,
+        placed=placed,
+        bandwidth=2,
+    )
+
+    # 列印結果
     print("\n\n")
     print("=== Placement Result (1 ~ n layers, leaf included) ===\n")
     for nid in sorted(placed.keys()):
@@ -184,7 +253,7 @@ def main():
     
     print("\n\n")
     print("=== Router Path Result (1 ~ n layers, leaf included) ===")
-    # 示範印出
+
     for level in sorted(routes.keys()):
         print(f"\nlevel {level} -> {level+1}")
         for (p, c), rec in routes[level].items():

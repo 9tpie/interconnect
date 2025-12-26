@@ -5,7 +5,7 @@ from visualize import visualize_grid
 
 
 def main():
-    num = 8
+    num = 32
 
     placed, grid = solve(num)
 
