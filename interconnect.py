@@ -139,66 +139,66 @@ def add_last_level_routes_to_network(
 
             added.add(key)
 
-def add_unique_route_links_by_level(
+
+def add_unique_route_links_for_level(
     net: Network,
+    level: int,
     routes: Dict[int, Dict[Tuple[int, int], dict]],
     placed: Dict[int, "Node"],
     bandwidth: float = 1.0,
-    dedup: bool = True,
-) -> Dict[int, List[Tuple[int, int]]]:
+    seen_undirected: Set[Tuple[int, int]] | None = None,
+) -> List[Tuple[int, int]]:
     """
-    對每個 level 檢查 routes[level][(p,c)]:
-      若 XY == YX，視為唯一路徑，將該 router path 拆成相鄰邊並加入 Network.add_link()
+    只處理單一 level：
+      - 若 XY == YX，視為唯一路徑
+      - 將 router path 拆成相鄰邊並加入 Network
 
     回傳：
-      unique_edges_by_level[level] = [(u_router, v_router), ...]
-      （u_router, v_router 依 path 的方向；若你要無向可再自行正規化）
+      [(u_router, v_router), ...]  此 level 新增的邊
     """
 
-    # router_id -> Node（用 placed 反建索引）
+    if level not in routes:
+        return []
+
+    # router_id -> Node
     router_to_node: Dict[int, "Node"] = {}
     for n in placed.values():
-        # 依你的資料，router 可能是 -1 表示沒有 router（例如 leaf/core）
         if getattr(n, "router_id", -1) is not None and n.router_id >= 0:
             router_to_node[n.router_id] = n
 
-    unique_edges_by_level: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
+    # 若 main 沒傳，就在這層自己用（通常建議 main 傳進來）
+    if seen_undirected is None:
+        seen_undirected = set()
 
-    # 全域去重：避免不同 level / 不同 pair 重複加到同一條 link
-    seen_undirected: Set[Tuple[int, int]] = set()
+    added_edges: List[Tuple[int, int]] = []
 
-    for level in sorted(routes.keys()):
-        for (p, c), info in routes[level].items():
-            path_xy: List[int] = info.get("XY", [])
-            path_yx: List[int] = info.get("YX", [])
+    for (p, c), info in routes[level].items():
+        path_xy = info.get("XY", [])
+        path_yx = info.get("YX", [])
 
-            # 你的「唯一路徑」判斷：XY 與 YX 完全相同
-            if path_xy != path_yx:
+        # 唯一路徑判斷
+        if path_xy != path_yx:
+            continue
+
+        path = path_xy
+        if len(path) < 2:
+            continue
+
+        for u, v in zip(path[:-1], path[1:]):
+            node_u = router_to_node.get(u)
+            node_v = router_to_node.get(v)
+            if node_u is None or node_v is None:
                 continue
 
-            # path_xy 就是唯一路徑（router_id 序列）
-            path = path_xy
-            if len(path) < 2:
+            key = (u, v) if u < v else (v, u)
+            if key in seen_undirected:
                 continue
+            seen_undirected.add(key)
 
-            # 拆成相鄰 router 邊：r0-r1, r1-r2, ...
-            for u, v in zip(path[:-1], path[1:]):
-                # 若其中一端找不到 router 對應的 Node，跳過（通常代表路徑穿過不存在的 router）
-                node_u = router_to_node.get(u)
-                node_v = router_to_node.get(v)
-                if node_u is None or node_v is None:
-                    continue
+            net.add_link(node_u, node_v, bandwidth)
+            added_edges.append((u, v))
 
-                if dedup:
-                    key = (u, v) if u < v else (v, u)
-                    if key in seen_undirected:
-                        continue
-                    seen_undirected.add(key)
-
-                net.add_link(node_u, node_v, bandwidth)
-                unique_edges_by_level[level].append((u, v))
-
-    return unique_edges_by_level
+    return added_edges
 
 def main():
     num = 16
@@ -223,10 +223,11 @@ def main():
     network = Network(W, H)
 
     for node in placed.values():
-        network.add_existing_node(node)
+        network.add_existing_node(node) 
 
 
     # 加最後一層（灰色由 add_last_level_routes_to_network 內部決定/傳入）
+    """
     add_last_level_routes_to_network(
         network=network,
         routes=routes,
@@ -234,14 +235,38 @@ def main():
         bandwidth=1,
         use="XY"
     )
+    """
+    
 
     # 加入唯一路徑
-    unique_edges_by_level = add_unique_route_links_by_level(
+
+    # 全域去重集合（跨 level）
+    seen_undirected = set()
+
+    unique_edges_by_level = {}
+
+    """
+    for level in sorted(routes.keys()):
+        edges = add_unique_route_links_for_level(
+            net=network,
+            level=level,
+            routes=routes,
+            placed=placed,
+            bandwidth=2,
+            seen_undirected=seen_undirected,
+        )
+        unique_edges_by_level[level] = edges
+    """
+    test_level = 2
+    edges = add_unique_route_links_for_level(
         net=network,
+        level=test_level,
         routes=routes,
         placed=placed,
         bandwidth=2,
+        seen_undirected=seen_undirected,
     )
+    
 
     # 列印結果
     print("\n\n")
