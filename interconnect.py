@@ -186,21 +186,61 @@ def add_edges(
 
     return added
 
-def add_missing_edges_if_any_connected(
-    path: List[int],
-    connected: Set[Edge],
+def add_missing_edge(
+    net: "Network",
+    routes_at_level: Dict[Tuple[int, int], dict],
+    router_to_node: Dict[int, "Node"],
     *,
-    undirected: bool = True,
+    bandwidth: float = 1.0,
+    seen: Optional[Set[Edge]] = None,
 ) -> List[Edge]:
     """
-    若 path 的邊中「至少一條」已存在 connected，回傳所有缺的邊；否則回空。
+    處理單一層級的路由：
+    檢查每對 (pair)，只有當 XY 與 YX 其中一條路徑接觸到 seen，而另一條沒有時，
+    才將剩下的邊補齊 (XOR 邏輯)。
     """
-    edges = path_to_edges(path, undirected=undirected)
-    if not edges:
-        return []
-    if not any(e in connected for e in edges):
-        return []
-    return [e for e in edges if e not in connected]
+    if seen is None:
+        seen = set()
+
+    added_all: List[Edge] = []
+
+    for pair, info in routes_at_level.items():
+        # 1. 取得路徑的邊 (轉成 set)
+        xy_edges = set(info.get("XY_edges", []))
+        yx_edges = set(info.get("YX_edges", []))
+        
+        # 2. 判斷個別路徑是否「接觸」到 seen
+        has_xy_contact = bool(xy_edges & seen)
+        has_yx_contact = bool(yx_edges & seen)
+
+        # 3. 核心邏輯修改：使用 XOR (^) 運算子
+        # 只有當 (有XY沒YX) 或 (有YX沒XY) 時為 True
+        is_triggered = has_xy_contact ^ has_yx_contact
+
+        if is_triggered:
+            # 4. 【邏輯修正】不再取聯集，而是誰觸發就補誰
+            edges_to_add = set()
+
+            if has_xy_contact:
+                # 若是 XY 觸發，只補齊 XY 剩下的邊
+                edges_to_add.update(xy_edges - seen)
+            else:
+                # 若是 YX 觸發 (由於 XOR 成立，這裡必定是 YX 為 True)
+                # 只補齊 YX 剩下的邊
+                edges_to_add.update(yx_edges - seen)
+
+            if edges_to_add:
+                newly_added = add_edges(
+                    net,
+                    list(edges_to_add), # 轉回 list 傳入
+                    router_to_node,
+                    bandwidth=bandwidth,
+                    seen=seen,
+                    undirected=True
+                )
+                added_all.extend(newly_added)
+
+    return added_all
 
 def add_last_level_routes_to_network(
     network: "Network",
@@ -209,26 +249,34 @@ def add_last_level_routes_to_network(
     bandwidth: float = 1.0,
     use: str = "XY",
     undirected: bool = True,
-):
+) -> List[Edge]: # 加上回傳型別提示
     if not routes:
-        return
+        return []
 
     last_level = max(routes.keys())
     router_to_node = build_router_to_node(placed)
-    seen: Set[Edge] = set()
+    
+    # 使用區域變數 seen 來避免重複添加 (如果你希望這個函式獨立運作)
+    local_seen: Set[Edge] = set() 
+    all_added_edges: List[Edge] = [] # 用來累積所有被加入的邊
 
     for (_p, _c), info in routes[last_level].items():
         path = info.get(use, [])
         edges = path_to_edges(path, undirected=undirected)
-        add_edges(
+        
+        # 呼叫 add_edges 並接收回傳值
+        added = add_edges(
             network,
             edges,
             router_to_node,
             bandwidth=bandwidth,
-            seen=seen,
+            seen=local_seen,
             undirected=undirected,
             color="gray",
         )
+        all_added_edges.extend(added) # 累積結果
+
+    return all_added_edges # 回傳完整的清單
 
 def add_unique_route_links_for_level(
     net: "Network",
@@ -275,6 +323,7 @@ def main():
     # router-core 配對
     router_map = assign_router(num)
     router_to_core = {rid: core for rid, core in router_map.items()}
+    router_to_node = build_router_to_node(placed)
 
     # 寫回 placed
     for rid, core in router_to_core.items():
@@ -296,9 +345,13 @@ def main():
     for node in placed.values():
         network.add_existing_node(node) 
 
+    # edge usage
+    seen_undirected = set()  # 避免重複呼叫 之後可能要改掉
+    unique_edges_by_level = {}
+    connected: Set[Edge] = set()
 
     # 加最後一層（灰色由 add_last_level_routes_to_network 內部決定/傳入）
-    add_last_level_routes_to_network(
+    last_edges = add_last_level_routes_to_network(
         network=network,
         routes=routes,
         placed=placed,
@@ -306,13 +359,12 @@ def main():
         use="XY",
         undirected=True,
     )
-    
+    connected.update(last_edges)
+    seen_undirected.update(last_edges)
+    print(f"加入leaf層: {seen_undirected}")
 
     # 加入唯一路徑
-
-    seen_undirected = set()
-    unique_edges_by_level = {}
-
+    """
     for level in sorted(routes.keys()):
         edges = add_unique_route_links_for_level(
             net=network,
@@ -320,11 +372,43 @@ def main():
             routes=routes,
             placed=placed,
             bandwidth=2,
-            seen_undirected=seen_undirected,  # ★ 跨 level 去重
+            seen_undirected=seen_undirected,
         )
-        unique_edges_by_level[level] = edges
+    unique_edges_by_level[level] = edges
+    connected.update(edges)
 
+    """
     
+    # 加入缺失的邊(迴圈)
+    """
+    for level, routes_in_level in edge_routes.items():
+        print(f"Processing Level {level}...")
+        
+        # 呼叫函式處理該層
+        added_edges = add_missing_edge(
+            net=network,
+            routes_at_level=routes_in_level,
+            router_to_node=router_to_node,
+            bandwidth=10.0,
+            seen=connected  # 這就是你的 connected set
+        )
+        
+        print(f"  -> Level {level} 新增了 {len(added_edges)} 條邊")
+    """
+    # 加入缺失的邊(單層測試)
+    
+    test_level = 2
+    added_edges = add_missing_edge(
+            net=network,
+            routes_at_level=edge_routes[test_level],
+            router_to_node=router_to_node,
+            bandwidth=10.0,
+            seen=connected  # 這就是你的 connected set
+        )
+    connected.update(added_edges)
+    seen_undirected.update(added_edges)
+    print(f"加入缺失的邊: {seen_undirected}")
+
     
 
     # 列印結果
@@ -352,9 +436,8 @@ def main():
             
             
 
-    # visualize_network(network)
+    visualize_network(network)
 
-    print(seen_undirected)
     
 
 if __name__ == "__main__":
