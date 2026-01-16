@@ -16,6 +16,10 @@ from visualize import visualize_network
 
 Edge = Tuple[int, int]
 
+STATUS_UNCONNECTED = 0
+STATUS_USE_XY = 1
+STATUS_USE_YX = 2
+
 def parent_child_pairs_by_level(num_nodes: int):
     """
     回傳格式：
@@ -56,7 +60,7 @@ def build_routes_dict_by_level(
 ) -> Dict[int, Dict[Tuple[int, int], dict]]:
     """
     回傳格式：
-    routes[level][(p,c)] = {
+    routes[level][(p, c)] = {
         "parent": p,
         "child": c,
         "src_router": placed[p].router_id,
@@ -91,6 +95,7 @@ def build_routes_dict_by_level(
                 "dst_router": c_node.router_id,
                 "XY": xy_router_path,
                 "YX": yx_router_path,
+                "status": STATUS_UNCONNECTED
             }
 
     return routes
@@ -250,6 +255,7 @@ def add_last_level_routes_to_network(
     use: str = "XY",
     undirected: bool = True,
 ) -> List[Edge]: # 加上回傳型別提示
+
     if not routes:
         return []
 
@@ -286,6 +292,7 @@ def add_unique_route_links_for_level(
     bandwidth: float = 1.0,
     seen_undirected: Optional[Set[Edge]] = None,
 ) -> List[Edge]:
+
     if level not in routes:
         return []
 
@@ -313,6 +320,208 @@ def add_unique_route_links_for_level(
         added_all.extend(added)
 
     return added_all
+
+def least_congestion_per_level(
+    routes: Dict[int, Dict[Tuple[int, int], dict]],
+    level: int,
+    net: "Network",
+    router_to_node: Dict[int, Node],
+    bandwidth: float = 10.0,
+    seen_undirected: Optional[Set[Edge]] = None,
+) -> List[Edge]:
+    """
+    針對同一層級 (Layer) 的所有連線配對，計算 XY 與 YX 路徑與「目前已選路徑」的重疊程度。
+    選擇重疊數較少的路徑，並將結果標記在 info['selected_type'] 與 info['selected_path']。
+    此函式會直接修改傳入的 routes_in_level 字典。
+    """
+    # 紀錄這一層目前為止被佔用的邊 (用 set 存無向邊 tuple 以加速比對)
+    occupied_edges: Set[Edge] = set()
+
+    added_all: List[Edge] = []
+
+    if level not in routes:
+        print(f"[DEBUG] 錯誤: routes 中找不到 level={level} 的資料")
+        return []
+
+    # Helper: 確保 edge 是 tuple 格式 (避免 list of lists 造成 set 失敗)
+    def to_edge_set(edge_list, tag=""):
+        try:
+            # 如果 edge_list 是空的
+            if not edge_list:
+                return set()
+            # 強制轉換每個元素為 tuple
+            s = set(tuple(e) for e in edge_list)
+            return s
+        except Exception as e:
+            print(f"[DEBUG] {tag} 資料格式轉換失敗: {e}, Data: {edge_list}")
+            return set()
+
+    # === Step 1: 優先處理無衝突路徑 (XY == YX) ===
+    print(f"--- Step 1: 優先處理無衝突路徑 (XY == YX) ---")
+
+    for (_p, _c), info in routes[level].items():
+        # [修正 1] Key 名稱改為 'XY' 和 'YX'
+        path_xy_nodes = info.get("XY", [])
+        path_yx_nodes = info.get("YX", [])
+
+        # 簡單檢查是否完全相同 (節點路徑相同，邊自然也相同)
+        if path_xy_nodes != path_yx_nodes:
+            continue
+
+        print(f"  [Match] 處理配對 Router {_p} -> {_c} (路徑相同)")
+
+        # [修正 2] 將「節點路徑」轉換為「邊的集合」
+        # 例如: [1, 9, 3] -> {(1, 9), (9, 3)}
+        edges = set()
+        if len(path_xy_nodes) > 1:
+            for i in range(len(path_xy_nodes) - 1):
+                u = path_xy_nodes[i]
+                v = path_xy_nodes[i + 1]
+                # 確保無向邊的一致性 (小 ID 在前，或者依靠 add_edges 處理)
+                # 這裡直接存 tuple 即可
+                edges.add((u, v))
+
+        print(f"    -> 節點路徑: {path_xy_nodes}")
+        print(f"    -> 轉換後候選邊: {edges}")
+
+        if not edges:
+            print(f"    -> [WARNING] 邊集合為空，跳過。")
+            continue
+
+        added = add_edges(
+            net,
+            edges,
+            router_to_node,
+            bandwidth=bandwidth,
+            seen=seen_undirected,
+            undirected=True,
+        )
+
+        if added:
+            print(f"    -> [SUCCESS] 成功加入新邊: {added}")
+            seen_undirected.update(added)
+        else:
+            print(f"    -> [INFO] 未加入任何邊 (可能已存在)")
+
+        occupied_edges.update(edges)
+        info["status"] = STATUS_USE_XY
+        added_all.extend(added)
+
+        # === Step 2: 計算重疊數, 決定剩下的 ===
+        print(f"--- Step 2: 處理衝突路徑 (計算重疊) ---")
+
+        # Helper: 將節點列表轉為邊集合
+        def nodes_to_edges_set(node_list):
+            s = set()
+            if node_list and len(node_list) > 1:
+                for i in range(len(node_list) - 1):
+                    # 確保轉為 tuple 以便放入 set
+                    s.add((node_list[i], node_list[i + 1]))
+            return s
+
+        for (_p, _c), info in routes[level].items():
+            # 跳過已經處理過的 (Step 1 處理過的)
+            if info.get("status") != STATUS_UNCONNECTED:
+                continue
+
+            print(f"  [Conflict Check] 處理配對 Router {_p} -> {_c}")
+
+            # [修正] 取得路徑資料 (統一變數名稱)
+            path_xy_nodes = info.get("XY", [])
+            path_yx_nodes = info.get("YX", [])
+
+            # [修正] 轉換為邊
+            edges_xy = nodes_to_edges_set(path_xy_nodes)
+            edges_yx = nodes_to_edges_set(path_yx_nodes)
+
+            # 計算重疊數 (Cost)
+            cost_xy = len(edges_xy.intersection(occupied_edges))
+            cost_yx = len(edges_yx.intersection(occupied_edges))
+
+            print(f"    -> Cost XY: {cost_xy} | Cost YX: {cost_yx}")
+            # print(f"       (XY邊: {edges_xy})")
+            # print(f"       (YX邊: {edges_yx})")
+
+            # 決策變數初始化
+            selected_edges = set()
+            selected_status = ""
+
+            # 決策：選 cost 小的，平手預設選 XY
+            if cost_xy <= cost_yx:
+                selected_edges = edges_xy
+                selected_status = STATUS_USE_XY
+                print(f"    -> 決定: 選 XY (重疊較少或相等)")
+            else:
+                selected_edges = edges_yx
+                selected_status = STATUS_USE_YX
+                print(f"    -> 決定: 選 YX (重疊較少)")
+
+            # 執行更新
+            added = add_edges(
+                net,
+                selected_edges,
+                router_to_node,
+                bandwidth=bandwidth,
+                seen=seen_undirected,
+                undirected=True,
+            )
+
+            if added:
+                print(f"    -> [SUCCESS] 成功加入新邊: {added}")
+                # 更新全域 seen，避免後續重複加入
+                seen_undirected.update(added)
+            else:
+                print(f"    -> [INFO] 未加入任何邊 (可能已存在於 seen)")
+
+            info["status"] = selected_status
+            added_all.extend(added)
+
+            # 更新本層的佔用紀錄
+            occupied_edges.update(selected_edges)
+
+    return added_all
+
+
+def print_result(placed, routes, edge_routes, node_layer_func):
+    """
+    列印 Placement, Router Path 以及 Router Edge 的結果。
+
+    Args:
+        placed (dict): 包含節點位置資訊的字典 (需包含 .x, .y, .router_id)
+        routes (dict): 包含路徑資訊的字典
+        edge_routes (dict): 包含邊緣路徑資訊的字典
+        node_layer_func (function): 輸入 nid 回傳 layer 的函式
+    """
+
+    # --- 1. Placement Result ---
+    print("\n\n")
+    print("=== Placement Result (1 ~ n layers, leaf included) ===\n")
+    for nid in sorted(placed.keys()):
+        n = placed[nid]
+        # 使用傳入的 node_layer_func 取得層級
+        layer = node_layer_func(nid)
+        print(f"node{nid:>3}  layer={layer}  at ({n.x},{n.y})  router_id={n.router_id}")
+
+    # --- 2. Router Path Result ---
+    print("\n\n")
+    print("=== Router Path Result (1 ~ n layers, leaf included) ===")
+
+    for level in sorted(routes.keys()):
+        print(f"\nlevel {level} -> {level + 1}")
+        for (p, c), rec in routes[level].items():
+            print(f"({p},{c})  XY={rec['XY']}  YX={rec['YX']}  status={rec['status']}")
+
+    # --- 3. Router Edge Result ---
+    print("\n\n")  # 補上換行讓格式與上面一致
+    print("=== Router Edge Result (1 ~ n layers, leaf included) ===")
+
+    for level in sorted(edge_routes.keys()):
+        print(f"\nlevel {level} -> {level + 1}")
+        for (p, c), info in edge_routes[level].items():
+            # 注意: 這裡原程式碼為 rec['status']，已修正為 info['status']
+            status = info.get('status', 'N/A')
+            print(f"({p},{c})  XY edges: {info['XY_edges']}  YX edges: {info['YX_edges']}  status={status}")
+
 
 
 
@@ -351,6 +560,8 @@ def main():
     connected: Set[Edge] = set()
 
     # 加最後一層（灰色由 add_last_level_routes_to_network 內部決定/傳入）
+
+    """
     last_edges = add_last_level_routes_to_network(
         network=network,
         routes=routes,
@@ -362,6 +573,8 @@ def main():
     connected.update(last_edges)
     seen_undirected.update(last_edges)
     print(f"加入leaf層: {seen_undirected}")
+    """
+
 
     # 加入唯一路徑
     """
@@ -396,7 +609,7 @@ def main():
         print(f"  -> Level {level} 新增了 {len(added_edges)} 條邊")
     """
     # 加入缺失的邊(單層測試)
-    
+    """
     test_level = 2
     added_edges = add_missing_edge(
             net=network,
@@ -408,32 +621,24 @@ def main():
     connected.update(added_edges)
     seen_undirected.update(added_edges)
     print(f"加入缺失的邊: {seen_undirected}")
-
-    
+    """
 
     # 列印結果
-    print("\n\n")
-    print("=== Placement Result (1 ~ n layers, leaf included) ===\n")
-    for nid in sorted(placed.keys()):
-        n = placed[nid]
-        print(f"node{nid:>3}  layer={node_layer(nid)}  at ({n.x},{n.y})  router_id={n.router_id}")
+    # print_result(placed, routes, edge_routes, node_layer)
 
-    
-    print("\n\n")
-    print("=== Router Path Result (1 ~ n layers, leaf included) ===")
+    print(routes[1])
+    # 測試單層避免擁塞
+    result_edges = least_congestion_per_level(
+            routes=routes,
+            level=1,
+            net=network,
+            router_to_node=router_to_node,
+            seen_undirected=seen_undirected
+        )
+    connected.update(result_edges)
+    seen_undirected.update(result_edges)
+    print(f"加入邊: {seen_undirected}")
 
-    for level in sorted(routes.keys()):
-        print(f"\nlevel {level} -> {level+1}")
-        for (p, c), rec in routes[level].items():
-            print(f"({p},{c})  XY={rec['XY']}  YX={rec['YX']}")
-
-    print("=== Router Edge Result (1 ~ n layers, leaf included) ===")
-
-    for level in sorted(edge_routes.keys()):
-        print(f"\nlevel {level} -> {level+1}")
-        for (p, c), info in edge_routes[level].items():
-            print(f"({p},{c})  XY edges: {info['XY_edges']}  YX edges: {info['YX_edges']}")
-            
             
 
     visualize_network(network)
