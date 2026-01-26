@@ -17,8 +17,7 @@ from visualize import visualize_network
 Edge = Tuple[int, int]
 
 STATUS_UNCONNECTED = 0
-STATUS_USE_XY = 1
-STATUS_USE_YX = 2
+STATUS_CONNECTED = 1
 
 def parent_child_pairs_by_level(num_nodes: int):
     """
@@ -244,6 +243,7 @@ def add_missing_edge(
                     undirected=True
                 )
                 added_all.extend(newly_added)
+            info["status"] = STATUS_CONNECTED
 
     return added_all
 
@@ -280,117 +280,76 @@ def add_last_level_routes_to_network(
             undirected=undirected,
             color="gray",
         )
-        all_added_edges.extend(added) # 累積結果
+        if added:
+            all_added_edges.extend(added) # 累積結果
+            info["status"] = STATUS_CONNECTED
 
     return all_added_edges # 回傳完整的清單
 
-def add_unique_route_links_for_level(
-    net: "Network",
-    level: int,
-    routes: Dict[int, Dict[Tuple[int, int], dict]],
-    placed: Dict[int, "Node"],
-    bandwidth: float = 1.0,
-    seen_undirected: Optional[Set[Edge]] = None,
-) -> List[Edge]:
-
-    if level not in routes:
-        return []
-
-    router_to_node = build_router_to_node(placed)
-    if seen_undirected is None:
-        seen_undirected = set()
-
-    added_all: List[Edge] = []
-
-    for (_p, _c), info in routes[level].items():
-        path_xy = info.get("XY", [])
-        path_yx = info.get("YX", [])
-        if path_xy != path_yx:
-            continue
-
-        edges = path_to_edges(path_xy, undirected=True)
-        added = add_edges(
-            net,
-            edges,
-            router_to_node,
-            bandwidth=bandwidth,
-            seen=seen_undirected,
-            undirected=True,
-        )
-        added_all.extend(added)
-
-    return added_all
 
 def least_congestion_per_level(
-    routes: Dict[int, Dict[Tuple[int, int], dict]],
-    level: int,
-    net: "Network",
-    router_to_node: Dict[int, Node],
-    bandwidth: float = 10.0,
-    seen_undirected: Optional[Set[Edge]] = None,
+        routes: Dict[int, Dict[Tuple[int, int], dict]],
+        level: int,
+        net: "Network",
+        router_to_node: Dict[int, Node],
+        bandwidth: float = 10.0,
+        seen_undirected: Optional[Set[Edge]] = None,
 ) -> List[Edge]:
     """
     針對同一層級 (Layer) 的所有連線配對，計算 XY 與 YX 路徑與「目前已選路徑」的重疊程度。
-    選擇重疊數較少的路徑，並將結果標記在 info['selected_type'] 與 info['selected_path']。
-    此函式會直接修改傳入的 routes_in_level 字典。
+    選擇重疊數較少的路徑，並將結果標記在 info['status']。
+    此函式會直接修改傳入的 routes 字典。
     """
+    if seen_undirected is None:
+        seen_undirected = set()
+
     # 紀錄這一層目前為止被佔用的邊 (用 set 存無向邊 tuple 以加速比對)
     occupied_edges: Set[Edge] = set()
-
     added_all: List[Edge] = []
 
     if level not in routes:
         print(f"[DEBUG] 錯誤: routes 中找不到 level={level} 的資料")
         return []
 
-    # Helper: 確保 edge 是 tuple 格式 (避免 list of lists 造成 set 失敗)
+    # Helper: 確保 edge 是 tuple 格式
     def to_edge_set(edge_list, tag=""):
         try:
-            # 如果 edge_list 是空的
-            if not edge_list:
-                return set()
-            # 強制轉換每個元素為 tuple
-            s = set(tuple(e) for e in edge_list)
-            return s
+            if not edge_list: return set()
+            return set(tuple(e) for e in edge_list)
         except Exception as e:
-            print(f"[DEBUG] {tag} 資料格式轉換失敗: {e}, Data: {edge_list}")
             return set()
 
+    # Helper: 節點轉排序後的邊集合
+    def nodes_to_edges_set(node_list):
+        s = set()
+        if node_list and isinstance(node_list[0], int):
+            for i in range(len(node_list) - 1):
+                s.add(tuple(sorted((node_list[i], node_list[i + 1]))))
+        return s
+
+    # ==========================================
     # === Step 1: 優先處理無衝突路徑 (XY == YX) ===
+    # ==========================================
     print(f"--- Step 1: 優先處理無衝突路徑 (XY == YX) ---")
 
     for (_p, _c), info in routes[level].items():
-        # [修正 1] Key 名稱改為 'XY' 和 'YX'
         path_xy_nodes = info.get("XY", [])
         path_yx_nodes = info.get("YX", [])
 
-        # 簡單檢查是否完全相同 (節點路徑相同，邊自然也相同)
+        # 簡單檢查是否完全相同
         if path_xy_nodes != path_yx_nodes:
             continue
 
-        print(f"  [Match] 處理配對 Router {_p} -> {_c} (路徑相同)")
+        # print(f"  [Match] 處理配對 Router {_p} -> {_c} (路徑相同)")
 
-        # [修正 2] 將「節點路徑」轉換為「邊的集合」
-        # 例如: [1, 9, 3] -> {(1, 9), (9, 3)}
-        edges = set()
-        if len(path_xy_nodes) > 1:
-            for i in range(len(path_xy_nodes) - 1):
-                u = path_xy_nodes[i]
-                v = path_xy_nodes[i + 1]
-                # 確保無向邊的一致性 (小 ID 在前，或者依靠 add_edges 處理)
-                # 這裡直接存 tuple 即可
-                edges.add((u, v))
-
-        print(f"    -> 節點路徑: {path_xy_nodes}")
-        print(f"    -> 轉換後候選邊: {edges}")
+        edges = nodes_to_edges_set(path_xy_nodes)
 
         if not edges:
-            print(f"    -> [WARNING] 邊集合為空，跳過。")
             continue
 
         added = add_edges(
             net,
-            edges,
+            list(edges),  # add_edges 需要 list
             router_to_node,
             bandwidth=bandwidth,
             seen=seen_undirected,
@@ -398,131 +357,169 @@ def least_congestion_per_level(
         )
 
         if added:
-            print(f"    -> [SUCCESS] 成功加入新邊: {added}")
             seen_undirected.update(added)
-        else:
-            print(f"    -> [INFO] 未加入任何邊 (可能已存在)")
+            added_all.extend(added)
 
+        # 即使邊已經存在(added為空)，只要路徑確認選定，就該更新狀態與佔用表
         occupied_edges.update(edges)
-        info["status"] = STATUS_USE_XY
-        added_all.extend(added)
 
-        # === Step 2: 同 Parent 局部擁塞檢查 (嚴格篩選版) ===
-        print(f"--- Step 2: 同 Parent 局部擁塞檢查 (僅處理單邊衝突) ---")
+        # --- 更新 Status ---
+        info["status"] = STATUS_CONNECTED
+        # ------------------
 
-        # 1. 依照 Parent 分組
-        from collections import defaultdict
-        parent_groups = defaultdict(list)
-        for (p, c), info in routes[level].items():
-            parent_groups[p].append(c)
+    # =======================================================
+    # === Step 2: 同 Parent 局部擁塞檢查 (僅處理單邊衝突) ===
+    # === 注意：這部分已經移出 Step 1 的迴圈外               ===
+    # =======================================================
+    print(f"--- Step 2: 同 Parent 局部擁塞檢查 (僅處理單邊衝突) ---")
 
-        # Helper: 節點轉排序後的邊集合
-        def nodes_to_edges_set(node_list):
-            s = set()
-            if node_list and isinstance(node_list[0], int):
-                for i in range(len(node_list) - 1):
-                    s.add(tuple(sorted((node_list[i], node_list[i + 1]))))
-            return s
+    # 1. 依照 Parent 分組
+    from collections import defaultdict
+    parent_groups = defaultdict(list)
+    for (p, c), info in routes[level].items():
+        parent_groups[p].append(c)
 
-        # 2. 針對每一組 Parent 進行處理
-        for p, children in parent_groups.items():
+    # 2. 針對每一組 Parent 進行處理
+    for p, children in parent_groups.items():
 
-            targets = [c for c in children if routes[level][(p, c)].get("status") == STATUS_UNCONNECTED]
-            if not targets:
+        # 只處理還沒連線的 (Status == 0)
+        targets = [c for c in children if routes[level][(p, c)].get("status") == STATUS_UNCONNECTED]
+        if not targets:
+            continue
+
+        print(f"\n[Group] Parent {p}，待處理子節點: {targets}")
+
+        # === 建立「目前已佔用」的集合 (含 Pre-fill: Step 1 已連線的兄弟) ===
+        local_occupied: Set[Edge] = set()
+
+        # [動作 A] Pre-fill: 載入已連線兄弟 (包含 Step 1 剛連上的)
+        for c in children:
+            info = routes[level][(p, c)]
+            status = info.get("status")
+            if status == STATUS_CONNECTED:
+                # 這裡原本邏輯較複雜，但因為 Step 1 只有唯一解，
+                # 而且如果 status 是 1，代表路徑已定，直接抓 XY 即可 (因為 XY==YX)
+                # 為了保險，我們還是照舊抓取
+                path_nodes = info.get("XY", [])  # 預設抓 XY
+                current_edges = nodes_to_edges_set(path_nodes)
+                local_occupied.update(current_edges)
+
+        # [動作 B] 逐一檢查並決策
+        for c in targets:
+            info = routes[level][(p, c)]
+
+            # 準備路徑
+            path_xy_nodes = info.get("XY", [])
+            path_yx_nodes = info.get("YX", [])
+
+            edges_xy = nodes_to_edges_set(path_xy_nodes)
+            edges_yx = nodes_to_edges_set(path_yx_nodes)
+
+            # 計算交集 (Cost)
+            cost_xy = len(edges_xy.intersection(local_occupied))
+            cost_yx = len(edges_yx.intersection(local_occupied))
+
+            print(f"  [Check] 子節點 {c} (Parent {p}) -> Cost XY: {cost_xy} | Cost YX: {cost_yx}")
+
+            selected_edges = set()
+            selected_path_nodes = []
+
+            # === 決策邏輯 ===
+            # 情況 3: 只有一條路暢通 -> 連線那一條
+            if cost_xy == 0 and cost_yx > 0:
+                print(f"    -> [DECISION] 選 XY")
+                selected_edges = edges_xy
+                selected_path_nodes = path_xy_nodes
+            elif cost_yx == 0 and cost_xy > 0:
+                print(f"    -> [DECISION] 選 YX")
+                selected_edges = edges_yx
+                selected_path_nodes = path_yx_nodes
+            else:
+                # cost_xy == 0 and cost_yx == 0 (都暢通 -> 暫不處理，或可預設 XY)
+                # cost_xy > 0 and cost_yx > 0 (都塞車 -> 放棄)
+                print(f"    -> [SKIP] 無法單純決策 (XY={cost_xy}, YX={cost_yx})")
                 continue
 
-            print(f"\n[Group] Parent {p}，待處理子節點: {targets}")
+            # 執行加入
+            added = add_edges(
+                net,
+                list(selected_edges),
+                router_to_node,
+                bandwidth=bandwidth,
+                seen=seen_undirected,
+                undirected=True,
+            )
 
-            # === 建立「目前已佔用」的集合 (含 Pre-fill) ===
-            local_occupied: Set[Edge] = set()
+            if added:
+                seen_undirected.update(added)
+                added_all.extend(added)
 
-            # [動作 A] Pre-fill: 載入已連線兄弟
-            for c in children:
-                info = routes[level][(p, c)]
-                status = info.get("status")
-                if status in [STATUS_USE_XY, STATUS_USE_YX]:
-                    path_key = "XY" if status == STATUS_USE_XY else "YX"
-                    path_data = info.get(path_key, [])
+            # --- 更新狀態與佔用表 ---
+            info["status"] = STATUS_CONNECTED
 
-                    # 處理資料格式 (相容 nodes list 或 edges list)
-                    current_edges = set()
-                    if path_data:
-                        if isinstance(path_data[0], int):  # nodes list
-                            current_edges = nodes_to_edges_set(path_data)
-                        else:  # edges list
-                            for u, v in path_data:
-                                current_edges.add(tuple(sorted((u, v))))
+            # 因為 XY 和 YX 不同，這裡理論上應該要標記選了哪條
+            # 但你的資料結構只存 status=1，所以這裡僅更新狀態
+            # 如果之後需要知道選了哪條，可能需要 info['selected'] = 'XY' 之類的欄位
 
-                    local_occupied.update(current_edges)
-
-            # [動作 B] 逐一檢查並決策
-            for c in targets:
-                info = routes[level][(p, c)]
-
-                # 準備路徑
-                path_xy_nodes = info.get("XY", [])
-                path_yx_nodes = info.get("YX", [])
-
-                edges_xy = nodes_to_edges_set(path_xy_nodes)
-                edges_yx = nodes_to_edges_set(path_yx_nodes)
-
-                # 計算交集 (Cost)
-                cost_xy = len(edges_xy.intersection(local_occupied))
-                cost_yx = len(edges_yx.intersection(local_occupied))
-
-                print(f"  [Check] 子節點 {c} (Parent {p}) -> Cost XY: {cost_xy} | Cost YX: {cost_yx}")
-
-                # === 決策邏輯 ===
-
-                # 情況 1: 兩條路都沒有交集 -> 略過
-                if cost_xy == 0 and cost_yx == 0:
-                    print(f"    -> [SKIP] 兩條路都暢通 (Both Cost=0)，暫不處理")
-                    continue
-
-                # 情況 2: 兩條路都有交集 -> 不連線 (太擠了，無法決定)
-                if cost_xy > 0 and cost_yx > 0:
-                    print(f"    -> [SKIP] 兩條路都擁塞 (XY={cost_xy}, YX={cost_yx})，放棄連線")
-                    continue
-
-                # 情況 3: 只有一條路暢通 -> 連線那一條
-                selected_edges = set()
-                selected_status = ""
-
-                if cost_xy == 0:
-                    print(f"    -> [DECISION] 只有 XY 暢通 (XY=0, YX={cost_yx}) -> 選 XY")
-                    selected_edges = edges_xy
-                    selected_status = STATUS_USE_XY
-                else:  # cost_yx == 0
-                    print(f"    -> [DECISION] 只有 YX 暢通 (XY={cost_xy}, YX=0) -> 選 YX")
-                    selected_edges = edges_yx
-                    selected_status = STATUS_USE_YX
-
-                # 執行加入
-                added = add_edges(
-                    net,
-                    selected_edges,
-                    router_to_node,
-                    bandwidth=bandwidth,
-                    seen=seen_undirected,
-                    undirected=True,
-                )
-
-                if added:
-                    print(f"    -> [SUCCESS] 成功加入邊: {added}")
-                    seen_undirected.update(added)
-                    added_all.extend(added)
-
-                    # 更新狀態
-                    info["status"] = selected_status
-
-                    # 更新 local_occupied (讓後面的兄弟知道這條路被選走了)
-                    local_occupied.update(selected_edges)
-                    occupied_edges.update(selected_edges)
-                else:
-                    print(f"    -> [INFO] 邊已存在，無法加入")
+            local_occupied.update(selected_edges)
+            occupied_edges.update(selected_edges)
+            # -----------------------
 
     return added_all
 
+def solve_multiple_solution(
+    routes_at_level: Dict[Tuple[int, int], dict],
+    router_to_node: Dict[int, "Node"],
+    net: "Network",
+    bandwidth: float = 10.0,
+    seen_undirected: Optional[Set[Edge]] = None,
+) -> None:
+    """
+    若有多組解，則選擇XY(default)來連接
+    """
+    """
+        Step 1: 檢查是否有路徑其實已經透過現有的邊 (seen_undirected) 連通了
+        """
+
+    # 輔助函式：檢查一條邊是否存在於 seen (處理無向性)
+    def is_edge_in_seen(u, v, seen_set):
+        # 假設 seen_set 裡存的是 tuple (u, v)
+        # 如果 seen_set 裡存的是 Edge 物件，請改用 Edge(u, v) in seen_set
+        return (u, v) in seen_set or (v, u) in seen_set
+
+    # 輔助函式：檢查整條路徑 (List of edges) 是否都存在
+    def is_path_connected(edges_list, seen_set):
+        if not edges_list: return False
+        for (u, v) in edges_list:
+            if not is_edge_in_seen(u, v, seen_set):
+                return False
+        return True
+
+    print("--- Step 1: Checking Existing Connectivity ---")
+
+    for (_p, _c), info in routes_at_level.items():
+
+        # 只檢查目前標記為 0 (未連線) 的
+        if info.get("status") == 0:
+
+            # 取得預計算好的邊列表 (從您的 Log 看來 info 裡已經有這些欄位了)
+            xy_edges = info.get('XY_edges', [])
+            yx_edges = info.get('YX_edges', [])
+
+            # 1. 檢查 XY 是否已通
+            if is_path_connected(xy_edges, seen_undirected):
+                print(f"Route {_p}->{_c} is already connected via XY.")
+                info['status'] = 1
+                continue  # 完成，換下一條路徑
+
+            # 2. 檢查 YX 是否已通 (這就是 Route 2->5 會被抓到的地方)
+            if is_path_connected(yx_edges, seen_undirected):
+                print(f"Route {_p}->{_c} is already connected via YX.")
+                info['status'] = 1
+                continue
+
+            # 3. 都不通，印出資訊給 Step 2 處理
+            print(f"Route {_p}->{_c} remains Unconnected.")
 
 def print_result(placed, routes, edge_routes, node_layer_func):
     """
@@ -603,7 +600,7 @@ def main():
 
     # 加最後一層（灰色由 add_last_level_routes_to_network 內部決定/傳入）
 
-    """
+
     last_edges = add_last_level_routes_to_network(
         network=network,
         routes=routes,
@@ -615,7 +612,11 @@ def main():
     connected.update(last_edges)
     seen_undirected.update(last_edges)
     print(f"加入leaf層: {seen_undirected}")
-    """
+
+    last_level = max(routes.keys())
+    for pair, info in routes[last_level].items():
+        if info["status"] == STATUS_CONNECTED:
+            edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
 
 
     # 加入唯一路徑
@@ -665,6 +666,8 @@ def main():
     print(f"加入缺失的邊: {seen_undirected}")
     """
 
+
+
     # 列印結果
     print_result(placed, routes, edge_routes, node_layer)
 
@@ -684,8 +687,8 @@ def main():
     print(f"加入邊: {seen_undirected}")
     """
 
-    # visualize_network(network)
-
+    visualize_network(network)
+    print(seen_undirected)
     
 
 if __name__ == "__main__":

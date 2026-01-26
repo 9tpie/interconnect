@@ -1,95 +1,107 @@
-"""
-測試任兩點間 計算路徑
-"""
-
-import math
-from collections import defaultdict
-from typing import List, Tuple
-
-from algorithms import solve
-from algorithms import node_layer
-from algorithms import assign_router
-from algorithms import xy_route_by_coord
-from algorithms import yx_route_by_coord
-from data_structure import Node
-
-def parent_child_pairs_by_level(num_nodes: int):
-    """
-    回傳格式：
-    level 1 2: (1,2) (1,3)
-    level 2 3: (2,4) (2,5) (3,6) (3,7)
-    """
-    levels = defaultdict(list)
-
-    for parent in range(1, num_nodes + 1):
-        parent_level = int(math.floor(math.log2(parent))) + 1
-
-        left = 2 * parent
-        right = 2 * parent + 1
-
-        if left <= num_nodes:
-            levels[parent_level].append((parent, left))
-        if right <= num_nodes:
-            levels[parent_level].append((parent, right))
-
-    return levels
-
-def find_node_by_router_id(placed, target_router_id):
-    for node in placed.values():
-        if node.router_id == target_router_id:
-            return node
-    return None
-
-
-
-def coord_to_router_id(xy: Tuple[int, int], placed: List[Node]) -> int:
-    x, y = xy
-    for n in placed.values():
-        if n.x == x and n.y == y:
-            return n.router_id
-    raise ValueError(f"座標 {xy} 找不到對應的 router")
-
-
+from helper_interconnect import *
 
 def main():
-    num = 8
 
+    num = 16
     placed, grid = solve(num)
-    print(type(placed))
-    #placed 資料結構
-    print("=== Placement Result (1 ~ n layers, leaf included) ===")
-    for nid in sorted(placed.keys()):
-        n = placed[nid]
-        print(f"node{nid:>3}  layer={node_layer(nid)}  at ({n.x},{n.y})  router_id={n.router_id}")
 
+    # router-core 配對
+    router_map = assign_router(num)
+    router_to_core = {rid: core for rid, core in router_map.items()}
+    router_to_node = build_router_to_node(placed)
 
-    source_router = 1
-    destination_router = 2
+    # 寫回 placed
+    for rid, core in router_to_core.items():
+        if rid in placed:
+            placed[rid].core_id = core
 
-    source_node = find_node_by_router_id(placed, source_router)
-    destination_node = find_node_by_router_id(placed, destination_router)
-    print(f"source router is {source_router}: ({source_node.x}, {source_node.y})")
-    print(f"destination router is {destination_router}: ({destination_node.x}, {destination_node.y})")
+    # build routes（寫回後再建）
+    routes = build_routes_dict_by_level(num - 1, placed)
+    print(f"The number of core(node): {num}\nThe number of level in tree: {len(routes)}")
 
-    src_xy = (source_node.x, source_node.y)
-    dst_xy = (destination_node.x, destination_node.y)
+        # 建立路徑轉為無向邊的dict
+    edge_routes = build_edge_dict_by_level(routes)
 
-    path_xy = xy_route_by_coord(src_xy, dst_xy)
-    
-    path_yx = yx_route_by_coord(src_xy, dst_xy)
+    # 建 network
+    k = int(math.log2(num))
+    W = 2 ** ((k + 1) // 2)
+    H = 2 ** (k // 2)
+    network = Network(W, H)
 
-    
-    router_xy_path = []
-    for xy in path_xy:
-        router_xy_path.append(coord_to_router_id(xy, placed))
+    for node in placed.values():
+        network.add_existing_node(node)
 
-    router_yx_path = []
-    for xy in path_yx:
-        router_yx_path.append(coord_to_router_id(xy, placed))
+    # edge usage
+    seen_undirected = set()  # 避免重複呼叫 之後可能要改掉
+    unique_edges_by_level = {}
+    connected: Set[Edge] = set()
 
-    print("XY path :", router_xy_path)
-    print("YX path :", router_yx_path)
-    
+    # step 1: 加入最後一層
+    print("step 1: 加入最後一層")
+    last_edges = add_last_level_routes_to_network(
+        network=network,
+        routes=routes,
+        placed=placed,
+        bandwidth=1,
+        use="XY",
+        undirected=True,
+    )
+    connected.update(last_edges)
+    seen_undirected.update(last_edges)
+
+    last_level = max(routes.keys())
+    for pair, info in routes[last_level].items():
+        if info["status"] == STATUS_CONNECTED:
+            edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
+
+    # step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑
+    print("step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑")
+    for level in range(len(routes)-1, 0, -1):
+        least_congestion_edges = least_congestion_per_level(
+            routes=routes,
+            level=level,
+            net=network,
+            router_to_node=router_to_node,
+            seen_undirected=seen_undirected
+        )
+        connected.update(least_congestion_edges)
+        seen_undirected.update(least_congestion_edges)
+
+        for pair, info in routes[level].items():
+            # 如果 routes 裡的狀態變成了 CONNECTED (1)
+            if info.get("status") == STATUS_CONNECTED:
+                # 就更新 edge_routes 對應的項目
+                edge_routes[level][pair]["status"] = STATUS_CONNECTED
+
+    # step 3: 解決最後沒被連上的邊
+    for level in range(len(routes)-1, 0, -1):
+        added_edges = add_missing_edge(
+            net=network,
+            routes_at_level=edge_routes[level],
+            router_to_node=router_to_node,
+            bandwidth=10.0,
+            seen=connected
+        )
+        connected.update(added_edges)
+        seen_undirected.update(added_edges)
+
+        for pair, info in routes[last_level].items():
+            if info["status"] == STATUS_CONNECTED:
+                edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
+
+    # step 4: 解決多組解的情況
+    print("\nstep 4 message")
+    for level in range(len(routes) - 1, 0, -1):
+        solve_multiple_solution(
+            net=network,
+            routes_at_level=edge_routes[level],
+            router_to_node=router_to_node,
+            bandwidth=20.0,
+            seen_undirected=connected
+        )
+    print_result(placed, routes, edge_routes, node_layer)
+
+    print(f"seen_undirected: {seen_undirected}")
 
 if __name__ == "__main__":
     main()
