@@ -278,7 +278,7 @@ def add_last_level_routes_to_network(
             bandwidth=bandwidth,
             seen=local_seen,
             undirected=undirected,
-            color="gray",
+            color="black",
         )
         if added:
             all_added_edges.extend(added) # 累積結果
@@ -467,60 +467,105 @@ def least_congestion_per_level(
 
     return added_all
 
+
 def solve_multiple_solution(
-    routes_at_level: Dict[Tuple[int, int], dict],
-    router_to_node: Dict[int, "Node"],
-    net: "Network",
-    bandwidth: float = 10.0,
-    seen_undirected: Optional[Set[Edge]] = None,
-) -> None:
+        routes_at_level: Dict[Tuple[int, int], dict],
+        router_to_node: Dict[int, "Node"],
+        net: "Network",
+        bandwidth: float = 10.0,
+        seen_undirected: Optional[Set[Tuple[int, int]]] = None,  # 修正型別提示
+) -> List[Tuple[int, int]]:
     """
     若有多組解，則選擇XY(default)來連接
     """
-    """
-        Step 1: 檢查是否有路徑其實已經透過現有的邊 (seen_undirected) 連通了
-        """
+    added_all: List[Tuple[int, int]] = []
 
-    # 輔助函式：檢查一條邊是否存在於 seen (處理無向性)
+    if seen_undirected is None:
+        seen_undirected = set()
+
+    # --- 修正後的輔助函式 (針對 Tuple) ---
     def is_edge_in_seen(u, v, seen_set):
-        # 假設 seen_set 裡存的是 tuple (u, v)
-        # 如果 seen_set 裡存的是 Edge 物件，請改用 Edge(u, v) in seen_set
+        """
+        直接檢查 tuple 是否存在於 set 中。
+        因為是 Tuple，必須手動檢查兩個方向來模擬無向邊。
+        """
         return (u, v) in seen_set or (v, u) in seen_set
 
-    # 輔助函式：檢查整條路徑 (List of edges) 是否都存在
     def is_path_connected(edges_list, seen_set):
-        if not edges_list: return False
+        if not edges_list:
+            return False
         for (u, v) in edges_list:
             if not is_edge_in_seen(u, v, seen_set):
                 return False
         return True
 
+    # ==========================================
+    # Step 1: 檢查既有連通性
+    # ==========================================
     print("--- Step 1: Checking Existing Connectivity ---")
 
     for (_p, _c), info in routes_at_level.items():
-
-        # 只檢查目前標記為 0 (未連線) 的
         if info.get("status") == 0:
-
-            # 取得預計算好的邊列表 (從您的 Log 看來 info 裡已經有這些欄位了)
             xy_edges = info.get('XY_edges', [])
             yx_edges = info.get('YX_edges', [])
 
-            # 1. 檢查 XY 是否已通
-            if is_path_connected(xy_edges, seen_undirected):
+            # 優先檢查 XY
+            if xy_edges and is_path_connected(xy_edges, seen_undirected):
                 print(f"Route {_p}->{_c} is already connected via XY.")
                 info['status'] = 1
-                continue  # 完成，換下一條路徑
+                continue
 
-            # 2. 檢查 YX 是否已通 (這就是 Route 2->5 會被抓到的地方)
-            if is_path_connected(yx_edges, seen_undirected):
+                # 其次檢查 YX
+            if yx_edges and is_path_connected(yx_edges, seen_undirected):
                 print(f"Route {_p}->{_c} is already connected via YX.")
                 info['status'] = 1
                 continue
 
-            # 3. 都不通，印出資訊給 Step 2 處理
             print(f"Route {_p}->{_c} remains Unconnected.")
 
+    # ==========================================
+    # Step 2: 執行 XY Routing 並補齊缺少的邊
+    # ==========================================
+    print("--- Step 2: Using default (XY) to connect ---")
+
+    for (_p, _c), info in routes_at_level.items():
+        if info.get("status") == 0:
+            xy_edges = info.get('XY_edges', [])
+
+            if not xy_edges:
+                continue
+
+            print(f"Routing {_p} -> {_c} via XY...")
+
+            for u, v in xy_edges:
+
+                # 1. 檢查是否已存在 (使用 Helper)
+                if is_edge_in_seen(u, v, seen_undirected):
+                    continue
+
+                # 2. 不存在則建立 (修正：直接建立 Tuple，不要呼叫 Edge())
+                try:
+                    new_edge = (u, v)  # <--- 這裡直接用 Tuple
+                    added = add_edges(
+                        net,
+                        [new_edge],
+                        router_to_node,
+                        bandwidth=bandwidth,
+                        seen=seen_undirected,
+                        undirected=True,
+                    )
+                    # 加入 seen (這裡我們統一存入 (u, v)，helper 會幫忙查反向)
+                    seen_undirected.add(new_edge)
+                    added_all.append(new_edge)
+
+                    print(f"  [+] Created missing link: {u} <-> {v}")
+
+                except Exception as e:
+                    print(f"  [!] Error creating edge {u}-{v}: {e}")
+
+            info['status'] = 1
+
+    return added_all
 def print_result(placed, routes, edge_routes, node_layer_func):
     """
     列印 Placement, Router Path 以及 Router Edge 的結果。

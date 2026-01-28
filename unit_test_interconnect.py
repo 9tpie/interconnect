@@ -101,7 +101,8 @@ def main():
         )
     print_result(placed, routes, edge_routes, node_layer)
 
-    print(f"seen_undirected: {seen_undirected}")
+    # print(f"seen_undirected: {seen_undirected}")
+    visualize_network(network)
 
 if __name__ == "__main__":
     main()
