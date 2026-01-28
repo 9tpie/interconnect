@@ -606,12 +606,7 @@ def print_result(placed, routes, edge_routes, node_layer_func):
             status = info.get('status', 'N/A')
             print(f"({p},{c})  XY edges: {info['XY_edges']}  YX edges: {info['YX_edges']}  status={status}")
 
-
-
-
-def main():
-    num = 16
-    placed, grid = solve(num)
+def solve_interconnect(num, placed):
 
     # router-core 配對
     router_map = assign_router(num)
@@ -625,6 +620,7 @@ def main():
 
     # build routes（寫回後再建）
     routes = build_routes_dict_by_level(num - 1, placed)
+    print(f"The number of core(node): {num}\nThe number of level in tree: {len(routes)}")
 
     # 建立路徑轉為無向邊的dict
     edge_routes = build_edge_dict_by_level(routes)
@@ -636,16 +632,15 @@ def main():
     network = Network(W, H)
 
     for node in placed.values():
-        network.add_existing_node(node) 
+        network.add_existing_node(node)
 
     # edge usage
     seen_undirected = set()  # 避免重複呼叫 之後可能要改掉
     unique_edges_by_level = {}
     connected: Set[Edge] = set()
 
-    # 加最後一層（灰色由 add_last_level_routes_to_network 內部決定/傳入）
-
-
+    # step 1: 加入最後一層
+    print("step 1: 加入最後一層")
     last_edges = add_last_level_routes_to_network(
         network=network,
         routes=routes,
@@ -656,85 +651,67 @@ def main():
     )
     connected.update(last_edges)
     seen_undirected.update(last_edges)
-    print(f"加入leaf層: {seen_undirected}")
 
     last_level = max(routes.keys())
     for pair, info in routes[last_level].items():
         if info["status"] == STATUS_CONNECTED:
             edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
 
-
-    # 加入唯一路徑
-    """
-    for level in sorted(routes.keys()):
-        edges = add_unique_route_links_for_level(
-            net=network,
+    # step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑
+    print("step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑")
+    for level in range(len(routes) - 1, 0, -1):
+        least_congestion_edges = least_congestion_per_level(
+            routes=routes,
             level=level,
-            routes=routes,
-            placed=placed,
-            bandwidth=2,
-            seen_undirected=seen_undirected,
-        )
-    unique_edges_by_level[level] = edges
-    connected.update(edges)
-
-    """
-    
-    # 加入缺失的邊(迴圈)
-    """
-    for level, routes_in_level in edge_routes.items():
-        print(f"Processing Level {level}...")
-        
-        # 呼叫函式處理該層
-        added_edges = add_missing_edge(
-            net=network,
-            routes_at_level=routes_in_level,
-            router_to_node=router_to_node,
-            bandwidth=10.0,
-            seen=connected  # 這就是你的 connected set
-        )
-        
-        print(f"  -> Level {level} 新增了 {len(added_edges)} 條邊")
-    """
-    # 加入缺失的邊(單層測試)
-    """
-    test_level = 2
-    added_edges = add_missing_edge(
-            net=network,
-            routes_at_level=edge_routes[test_level],
-            router_to_node=router_to_node,
-            bandwidth=10.0,
-            seen=connected  # 這就是你的 connected set
-        )
-    connected.update(added_edges)
-    seen_undirected.update(added_edges)
-    print(f"加入缺失的邊: {seen_undirected}")
-    """
-
-
-
-    # 列印結果
-    print_result(placed, routes, edge_routes, node_layer)
-
-    """
-    test_level = 2
-    print(routes[test_level])
-    # 測試單層避免擁塞
-    result_edges = least_congestion_per_level(
-            routes=routes,
-            level=test_level,
             net=network,
             router_to_node=router_to_node,
             seen_undirected=seen_undirected
         )
-    connected.update(result_edges)
-    seen_undirected.update(result_edges)
-    print(f"加入邊: {seen_undirected}")
-    """
+        connected.update(least_congestion_edges)
+        seen_undirected.update(least_congestion_edges)
 
+        for pair, info in routes[level].items():
+            # 如果 routes 裡的狀態變成了 CONNECTED (1)
+            if info.get("status") == STATUS_CONNECTED:
+                # 就更新 edge_routes 對應的項目
+                edge_routes[level][pair]["status"] = STATUS_CONNECTED
+
+    # step 3: 解決最後沒被連上的邊
+    for level in range(len(routes) - 1, 0, -1):
+        added_edges = add_missing_edge(
+            net=network,
+            routes_at_level=edge_routes[level],
+            router_to_node=router_to_node,
+            bandwidth=10.0,
+            seen=connected
+        )
+        connected.update(added_edges)
+        seen_undirected.update(added_edges)
+
+        for pair, info in routes[last_level].items():
+            if info["status"] == STATUS_CONNECTED:
+                edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
+
+    # step 4: 解決多組解的情況
+    print("\nstep 4 message")
+    for level in range(len(routes) - 1, 0, -1):
+        solve_multiple_solution(
+            net=network,
+            routes_at_level=edge_routes[level],
+            router_to_node=router_to_node,
+            bandwidth=20.0,
+            seen_undirected=connected
+        )
+
+    return routes, edge_routes, node_layer, network
+
+def main():
+
+    num = 16
+    placed, grid = solve(num)
+    routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
+    print_result(placed, routes, edge_routes, node_layer)
     visualize_network(network)
-    print(seen_undirected)
-    
 
 if __name__ == "__main__":
     main()
