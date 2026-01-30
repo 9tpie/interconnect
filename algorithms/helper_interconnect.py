@@ -146,24 +146,19 @@ def build_router_to_node(placed: Dict[int, "Node"]) -> Dict[int, "Node"]:
             router_to_node[rid] = n
     return router_to_node
 
+
 def add_edges(
-    net: "Network",
-    edges: Iterable[Edge],
-    router_to_node: Dict[int, "Node"],
-    *,
-    bandwidth: float = 1.0,
-    seen: Optional[Set[Edge]] = None,
-    undirected: bool = True,
-    color: Optional[str] = None,
-    add_to_seen: bool = True,
+        net: "Network",
+        edges: Iterable[Edge],
+        router_to_node: Dict[int, "Node"],
+        *,
+        bandwidth: float = 1.0,
+        seen: Optional[Set[Edge]] = None,
+        undirected: bool = True,
+        color: Optional[str] = None,
+        add_to_seen: bool = True,
+        update_if_exists: bool = True,  # 新增一個參數控制是否更新
 ) -> List[Edge]:
-    """
-    把 edges 加入 net：
-      - router_id -> Node 查表
-      - seen 去重（預設無向正規化）
-      - 可指定 color（若 Network.add_link 支援 color 參數）
-    回傳：實際新增的 edges（以輸入的正規化形式）
-    """
     if seen is None:
         seen = set()
 
@@ -171,19 +166,21 @@ def add_edges(
 
     for (a, b) in edges:
         key = undirected_edge(a, b) if undirected else (a, b)
-        if key in seen:
-            continue
 
         node_a = router_to_node.get(a)
         node_b = router_to_node.get(b)
         if node_a is None or node_b is None:
             continue
 
-        if color is None:
-            net.add_link(node_a, node_b, bandwidth)
-        else:
-            net.add_link(node_a, node_b, bandwidth, color=color)
-
+        if key in seen:
+            if update_if_exists:
+                # 假設你的 network 有 update_link_bandwidth 方法
+                # 或者重新 add_link 看看 network 物件是否會處理覆蓋
+                net.add_link(node_a, node_b, bandwidth, color=color)
+                added.append(key)
+            continue
+        # 原有的新增邏輯
+        net.add_link(node_a, node_b, bandwidth, color=color)
         added.append(key)
         if add_to_seen:
             seen.add(key)
@@ -254,7 +251,7 @@ def add_last_level_routes_to_network(
     bandwidth: float = 1.0,
     use: str = "XY",
     undirected: bool = True,
-) -> List[Edge]: # 加上回傳型別提示
+) -> List[Edge]:
 
     if not routes:
         return []
@@ -308,7 +305,7 @@ def least_congestion_per_level(
     added_all: List[Edge] = []
 
     if level not in routes:
-        print(f"[DEBUG] 錯誤: routes 中找不到 level={level} 的資料")
+        # print(f"[DEBUG] 錯誤: routes 中找不到 level={level} 的資料")
         return []
 
     # Helper: 確保 edge 是 tuple 格式
@@ -330,7 +327,7 @@ def least_congestion_per_level(
     # ==========================================
     # === Step 1: 優先處理無衝突路徑 (XY == YX) ===
     # ==========================================
-    print(f"--- Step 1: 優先處理無衝突路徑 (XY == YX) ---")
+    # print(f"--- Step 1: 優先處理無衝突路徑 (XY == YX) ---")
 
     for (_p, _c), info in routes[level].items():
         path_xy_nodes = info.get("XY", [])
@@ -346,7 +343,7 @@ def least_congestion_per_level(
 
         if not edges:
             continue
-
+        print(f"edges: {edges}")
         added = add_edges(
             net,
             list(edges),  # add_edges 需要 list
@@ -355,7 +352,7 @@ def least_congestion_per_level(
             seen=seen_undirected,
             undirected=True,
         )
-
+        print(f"added: {added}")
         if added:
             seen_undirected.update(added)
             added_all.extend(added)
@@ -371,7 +368,7 @@ def least_congestion_per_level(
     # === Step 2: 同 Parent 局部擁塞檢查 (僅處理單邊衝突) ===
     # === 注意：這部分已經移出 Step 1 的迴圈外               ===
     # =======================================================
-    print(f"--- Step 2: 同 Parent 局部擁塞檢查 (僅處理單邊衝突) ---")
+    # print(f"--- Step 2: 同 Parent 局部擁塞檢查 (僅處理單邊衝突) ---")
 
     # 1. 依照 Parent 分組
     from collections import defaultdict
@@ -387,7 +384,7 @@ def least_congestion_per_level(
         if not targets:
             continue
 
-        print(f"\n[Group] Parent {p}，待處理子節點: {targets}")
+        # print(f"\n[Group] Parent {p}，待處理子節點: {targets}")
 
         # === 建立「目前已佔用」的集合 (含 Pre-fill: Step 1 已連線的兄弟) ===
         local_occupied: Set[Edge] = set()
@@ -419,7 +416,7 @@ def least_congestion_per_level(
             cost_xy = len(edges_xy.intersection(local_occupied))
             cost_yx = len(edges_yx.intersection(local_occupied))
 
-            print(f"  [Check] 子節點 {c} (Parent {p}) -> Cost XY: {cost_xy} | Cost YX: {cost_yx}")
+            # print(f"  [Check] 子節點 {c} (Parent {p}) -> Cost XY: {cost_xy} | Cost YX: {cost_yx}")
 
             selected_edges = set()
             selected_path_nodes = []
@@ -427,17 +424,17 @@ def least_congestion_per_level(
             # === 決策邏輯 ===
             # 情況 3: 只有一條路暢通 -> 連線那一條
             if cost_xy == 0 and cost_yx > 0:
-                print(f"    -> [DECISION] 選 XY")
+                # print(f"    -> [DECISION] 選 XY")
                 selected_edges = edges_xy
                 selected_path_nodes = path_xy_nodes
             elif cost_yx == 0 and cost_xy > 0:
-                print(f"    -> [DECISION] 選 YX")
+                # print(f"    -> [DECISION] 選 YX")
                 selected_edges = edges_yx
                 selected_path_nodes = path_yx_nodes
             else:
                 # cost_xy == 0 and cost_yx == 0 (都暢通 -> 暫不處理，或可預設 XY)
                 # cost_xy > 0 and cost_yx > 0 (都塞車 -> 放棄)
-                print(f"    -> [SKIP] 無法單純決策 (XY={cost_xy}, YX={cost_yx})")
+                # print(f"    -> [SKIP] 無法單純決策 (XY={cost_xy}, YX={cost_yx})")
                 continue
 
             # 執行加入
@@ -645,7 +642,7 @@ def solve_interconnect(num, placed):
         network=network,
         routes=routes,
         placed=placed,
-        bandwidth=1,
+        bandwidth=2,
         use="XY",
         undirected=True,
     )
@@ -659,12 +656,13 @@ def solve_interconnect(num, placed):
 
     # step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑
     print("step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑")
-    for level in range(len(routes) - 1, 0, -1):
+    for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         least_congestion_edges = least_congestion_per_level(
             routes=routes,
             level=level,
             net=network,
             router_to_node=router_to_node,
+            bandwidth = float(4*(i+1)),
             seen_undirected=seen_undirected
         )
         connected.update(least_congestion_edges)
@@ -677,12 +675,12 @@ def solve_interconnect(num, placed):
                 edge_routes[level][pair]["status"] = STATUS_CONNECTED
 
     # step 3: 解決最後沒被連上的邊
-    for level in range(len(routes) - 1, 0, -1):
+    for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         added_edges = add_missing_edge(
             net=network,
             routes_at_level=edge_routes[level],
             router_to_node=router_to_node,
-            bandwidth=10.0,
+            bandwidth=float(4*(i+1)),
             seen=connected
         )
         connected.update(added_edges)
@@ -694,23 +692,101 @@ def solve_interconnect(num, placed):
 
     # step 4: 解決多組解的情況
     print("\nstep 4 message")
-    for level in range(len(routes) - 1, 0, -1):
+    for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         solve_multiple_solution(
             net=network,
             routes_at_level=edge_routes[level],
             router_to_node=router_to_node,
-            bandwidth=20.0,
+            bandwidth=float(4*(i+1)),
             seen_undirected=connected
         )
 
     return routes, edge_routes, node_layer, network
+
+def test_bandwidth(num, placed):
+    # router-core 配對
+    router_map = assign_router(num)
+    router_to_core = {rid: core for rid, core in router_map.items()}
+    router_to_node = build_router_to_node(placed)
+
+    # 寫回 placed
+    for rid, core in router_to_core.items():
+        if rid in placed:
+            placed[rid].core_id = core
+
+    # build routes（寫回後再建）
+    routes = build_routes_dict_by_level(num - 1, placed)
+    print(f"The number of core(node): {num}\nThe number of level in tree: {len(routes)}")
+
+    # 建立路徑轉為無向邊的dict
+    edge_routes = build_edge_dict_by_level(routes)
+
+    # 建 network
+    k = int(math.log2(num))
+    W = 2 ** ((k + 1) // 2)
+    H = 2 ** (k // 2)
+    network = Network(W, H)
+
+    for node in placed.values():
+        network.add_existing_node(node)
+
+    seen_undirected = set()
+    connected: Set[Edge] = set()
+    # step 1: 加入最後一層
+    print("step 1: 加入最後一層")
+
+    last_edges = add_last_level_routes_to_network(
+        network=network,
+        routes=routes,
+        placed=placed,
+        bandwidth=2,
+        use="XY",
+        undirected=True,
+    )
+    connected.update(last_edges)
+    seen_undirected.update(last_edges)
+
+    last_level = max(routes.keys())
+    for pair, info in routes[last_level].items():
+        if info["status"] == STATUS_CONNECTED:
+            edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
+
+    print(f"step 1加入的邊(共有{len(seen_undirected)}個): {seen_undirected}")
+
+    # step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑
+    print("step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑")
+
+    for i, level in enumerate(range(len(routes) - 1, 0, -1)):
+        least_congestion_edges = least_congestion_per_level(
+            routes=routes,
+            level=level,
+            net=network,
+            router_to_node=router_to_node,
+            bandwidth=float(4*(i+1)),
+            seen_undirected=seen_undirected
+        )
+        connected.update(least_congestion_edges)
+        seen_undirected.update(least_congestion_edges)
+
+        for pair, info in routes[level].items():
+            # 如果 routes 裡的狀態變成了 CONNECTED (1)
+            if info.get("status") == STATUS_CONNECTED:
+                # 就更新 edge_routes 對應的項目
+                edge_routes[level][pair]["status"] = STATUS_CONNECTED
+
+    print(f"step 2加入的邊(共有{len(seen_undirected)}個): {seen_undirected}")
+
+    return network
 
 def main():
 
     num = 16
     placed, grid = solve(num)
     routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
-    print_result(placed, routes, edge_routes, node_layer)
+    #print_result(placed, routes, edge_routes, node_layer)
+    #visualize_network(network)
+
+    # network = test_bandwidth(num, placed)
     visualize_network(network)
 
 if __name__ == "__main__":

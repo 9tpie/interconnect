@@ -1,9 +1,6 @@
-from helper_interconnect import *
+from algorithms.helper_interconnect import *
 
-def main():
-
-    num = 16
-    placed, grid = solve(num)
+def solve_interconnect(num, placed):
 
     # router-core 配對
     router_map = assign_router(num)
@@ -19,7 +16,7 @@ def main():
     routes = build_routes_dict_by_level(num - 1, placed)
     print(f"The number of core(node): {num}\nThe number of level in tree: {len(routes)}")
 
-        # 建立路徑轉為無向邊的dict
+    # 建立路徑轉為無向邊的dict
     edge_routes = build_edge_dict_by_level(routes)
 
     # 建 network
@@ -56,7 +53,7 @@ def main():
 
     # step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑
     print("step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑")
-    for level in range(len(routes)-1, 0, -1):
+    for level in range(len(routes) - 1, 0, -1):
         least_congestion_edges = least_congestion_per_level(
             routes=routes,
             level=level,
@@ -74,7 +71,7 @@ def main():
                 edge_routes[level][pair]["status"] = STATUS_CONNECTED
 
     # step 3: 解決最後沒被連上的邊
-    for level in range(len(routes)-1, 0, -1):
+    for level in range(len(routes) - 1, 0, -1):
         added_edges = add_missing_edge(
             net=network,
             routes_at_level=edge_routes[level],
@@ -99,10 +96,17 @@ def main():
             bandwidth=20.0,
             seen_undirected=connected
         )
-    print_result(placed, routes, edge_routes, node_layer)
 
-    # print(f"seen_undirected: {seen_undirected}")
+    return routes, edge_routes, node_layer, network
+
+def main():
+
+    num = 16
+    placed, grid = solve(num)
+    routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
+    print_result(placed, routes, edge_routes, node_layer)
     visualize_network(network)
+
 
 if __name__ == "__main__":
     main()
