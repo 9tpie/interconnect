@@ -224,11 +224,11 @@ def add_missing_edge(
 
             if has_xy_contact:
                 # 若是 XY 觸發，只補齊 XY 剩下的邊
-                edges_to_add.update(xy_edges - seen)
+                edges_to_add.update(xy_edges)
             else:
                 # 若是 YX 觸發 (由於 XOR 成立，這裡必定是 YX 為 True)
                 # 只補齊 YX 剩下的邊
-                edges_to_add.update(yx_edges - seen)
+                edges_to_add.update(yx_edges)
 
             if edges_to_add:
                 newly_added = add_edges(
@@ -343,7 +343,7 @@ def least_congestion_per_level(
 
         if not edges:
             continue
-        print(f"edges: {edges}")
+        # print(f"edges: {edges}")
         added = add_edges(
             net,
             list(edges),  # add_edges 需要 list
@@ -352,7 +352,7 @@ def least_congestion_per_level(
             seen=seen_undirected,
             undirected=True,
         )
-        print(f"added: {added}")
+        # print(f"added: {added}")
         if added:
             seen_undirected.update(added)
             added_all.extend(added)
