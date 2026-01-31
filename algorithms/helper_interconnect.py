@@ -470,22 +470,19 @@ def solve_multiple_solution(
         router_to_node: Dict[int, "Node"],
         net: "Network",
         bandwidth: float = 10.0,
-        seen_undirected: Optional[Set[Tuple[int, int]]] = None,  # 修正型別提示
+        seen_undirected: Optional[Set[Tuple[int, int]]] = None,
 ) -> List[Tuple[int, int]]:
     """
-    若有多組解，則選擇XY(default)來連接
+    若有多組解，則選擇 XY(default) 來連接。
+    同時處理頻寬更新 (取 Max) 與 seen 集合維護。
     """
     added_all: List[Tuple[int, int]] = []
 
     if seen_undirected is None:
         seen_undirected = set()
 
-    # --- 修正後的輔助函式 (針對 Tuple) ---
+    # --- 1. 輔助函式：路徑連通檢查 ---
     def is_edge_in_seen(u, v, seen_set):
-        """
-        直接檢查 tuple 是否存在於 set 中。
-        因為是 Tuple，必須手動檢查兩個方向來模擬無向邊。
-        """
         return (u, v) in seen_set or (v, u) in seen_set
 
     def is_path_connected(edges_list, seen_set):
@@ -496,34 +493,67 @@ def solve_multiple_solution(
                 return False
         return True
 
-    # ==========================================
-    # Step 1: 檢查既有連通性
-    # ==========================================
-    print("--- Step 1: Checking Existing Connectivity ---")
+    # --- 2. 輔助函式：統一的頻寬更新邏輯 ---
+    def update_link_bandwidth(u_id: int, v_id: int, req_bw: float):
+        """
+        核心邏輯：
+        1. 轉換 ID 為 Node 物件
+        2. 遍歷 net.links 檢查是否存在
+        3. 若存在，取 max(舊頻寬, 新頻寬)
+        4. 呼叫 net.add_link (該方法會處理 '更新' 或 '新增')
+        """
+        node_u = router_to_node[u_id]
+        node_v = router_to_node[v_id]
 
+        current_bw = 0.0
+
+        # 遍歷 List 尋找既有頻寬 (因為 Network 沒有 dict 索引)
+        for link in net.links:
+            # 檢查雙向
+            is_forward = (link.node_u == node_u and link.node_v == node_v)
+            is_backward = (link.node_u == node_v and link.node_v == node_u)
+            if is_forward or is_backward:
+                current_bw = link.bandwidth
+                break
+
+        # 取最大值：確保共享路徑的頻寬足夠
+        final_bw = max(current_bw, req_bw)
+
+        # 寫入 Network
+        net.add_link(node_u, node_v, final_bw)
+
+    # ==========================================
+    # Step 1: 檢查既有連通性 (並更新頻寬)
+    # ==========================================
     for (_p, _c), info in routes_at_level.items():
         if info.get("status") == 0:
             xy_edges = info.get('XY_edges', [])
             yx_edges = info.get('YX_edges', [])
 
-            # 優先檢查 XY
+            # --- 優先檢查 XY ---
             if xy_edges and is_path_connected(xy_edges, seen_undirected):
-                print(f"Route {_p}->{_c} is already connected via XY.")
+                # print(f"Route {_p}->{_c} is already connected via XY.")
                 info['status'] = 1
+
+                # [修正] 不使用 net.has_edge，改用 helper 更新頻寬
+                for u, v in xy_edges:
+                    update_link_bandwidth(u, v, bandwidth)
                 continue
 
-                # 其次檢查 YX
+            # --- 其次檢查 YX ---
             if yx_edges and is_path_connected(yx_edges, seen_undirected):
-                print(f"Route {_p}->{_c} is already connected via YX.")
+                # print(f"Route {_p}->{_c} is already connected via YX.")
                 info['status'] = 1
+
+                # [修正] 不使用 net.has_edge，改用 helper 更新頻寬
+                for u, v in yx_edges:
+                    update_link_bandwidth(u, v, bandwidth)
                 continue
 
-            print(f"Route {_p}->{_c} remains Unconnected.")
-
     # ==========================================
-    # Step 2: 執行 XY Routing 並補齊缺少的邊
+    # Step 2: 執行 Default (XY) Routing 並補齊缺少的邊
     # ==========================================
-    print("--- Step 2: Using default (XY) to connect ---")
+    # print("--- Step 2: Using default (XY) to connect ---")
 
     for (_p, _c), info in routes_at_level.items():
         if info.get("status") == 0:
@@ -532,37 +562,28 @@ def solve_multiple_solution(
             if not xy_edges:
                 continue
 
-            print(f"Routing {_p} -> {_c} via XY...")
+            # print(f"Routing {_p} -> {_c} via XY...")
 
             for u, v in xy_edges:
+                # 判斷是否為「全新」的邊 (僅用於記錄 added_all)
+                is_new_edge = not is_edge_in_seen(u, v, seen_undirected)
 
-                # 1. 檢查是否已存在 (使用 Helper)
-                if is_edge_in_seen(u, v, seen_undirected):
-                    continue
+                # [修正] 核心動作：無論是否 seen，都必須呼叫此函式來確保/更新頻寬
+                # 因為可能這條邊之前被加過，但頻寬只有 5.0，現在需要 10.0
+                update_link_bandwidth(u, v, bandwidth)
 
-                # 2. 不存在則建立 (修正：直接建立 Tuple，不要呼叫 Edge())
-                try:
-                    new_edge = (u, v)  # <--- 這裡直接用 Tuple
-                    added = add_edges(
-                        net,
-                        [new_edge],
-                        router_to_node,
-                        bandwidth=bandwidth,
-                        seen=seen_undirected,
-                        undirected=True,
-                    )
-                    # 加入 seen (這裡我們統一存入 (u, v)，helper 會幫忙查反向)
-                    seen_undirected.add(new_edge)
-                    added_all.append(new_edge)
+                # 更新 seen 集合 (雙向)
+                seen_undirected.add((u, v))
+                seen_undirected.add((v, u))
 
-                    print(f"  [+] Created missing link: {u} <-> {v}")
-
-                except Exception as e:
-                    print(f"  [!] Error creating edge {u}-{v}: {e}")
+                if is_new_edge:
+                    added_all.append((u, v))
+                    # print(f"  [+] Created/Updated link: {u} <-> {v}")
 
             info['status'] = 1
 
     return added_all
+
 def print_result(placed, routes, edge_routes, node_layer_func):
     """
     列印 Placement, Router Path 以及 Router Edge 的結果。
@@ -637,7 +658,7 @@ def solve_interconnect(num, placed):
     connected: Set[Edge] = set()
 
     # step 1: 加入最後一層
-    print("step 1: 加入最後一層")
+
     last_edges = add_last_level_routes_to_network(
         network=network,
         routes=routes,
@@ -655,7 +676,7 @@ def solve_interconnect(num, placed):
             edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
 
     # step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑
-    print("step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑")
+
     for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         least_congestion_edges = least_congestion_per_level(
             routes=routes,
@@ -691,7 +712,6 @@ def solve_interconnect(num, placed):
                 edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
 
     # step 4: 解決多組解的情況
-    print("\nstep 4 message")
     for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         solve_multiple_solution(
             net=network,
@@ -703,80 +723,7 @@ def solve_interconnect(num, placed):
 
     return routes, edge_routes, node_layer, network
 
-def test_bandwidth(num, placed):
-    # router-core 配對
-    router_map = assign_router(num)
-    router_to_core = {rid: core for rid, core in router_map.items()}
-    router_to_node = build_router_to_node(placed)
 
-    # 寫回 placed
-    for rid, core in router_to_core.items():
-        if rid in placed:
-            placed[rid].core_id = core
-
-    # build routes（寫回後再建）
-    routes = build_routes_dict_by_level(num - 1, placed)
-    print(f"The number of core(node): {num}\nThe number of level in tree: {len(routes)}")
-
-    # 建立路徑轉為無向邊的dict
-    edge_routes = build_edge_dict_by_level(routes)
-
-    # 建 network
-    k = int(math.log2(num))
-    W = 2 ** ((k + 1) // 2)
-    H = 2 ** (k // 2)
-    network = Network(W, H)
-
-    for node in placed.values():
-        network.add_existing_node(node)
-
-    seen_undirected = set()
-    connected: Set[Edge] = set()
-    # step 1: 加入最後一層
-    print("step 1: 加入最後一層")
-
-    last_edges = add_last_level_routes_to_network(
-        network=network,
-        routes=routes,
-        placed=placed,
-        bandwidth=2,
-        use="XY",
-        undirected=True,
-    )
-    connected.update(last_edges)
-    seen_undirected.update(last_edges)
-
-    last_level = max(routes.keys())
-    for pair, info in routes[last_level].items():
-        if info["status"] == STATUS_CONNECTED:
-            edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
-
-    print(f"step 1加入的邊(共有{len(seen_undirected)}個): {seen_undirected}")
-
-    # step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑
-    print("step 2: 解決每一層中的唯一路徑以及交集為0的唯一路徑")
-
-    for i, level in enumerate(range(len(routes) - 1, 0, -1)):
-        least_congestion_edges = least_congestion_per_level(
-            routes=routes,
-            level=level,
-            net=network,
-            router_to_node=router_to_node,
-            bandwidth=float(4*(i+1)),
-            seen_undirected=seen_undirected
-        )
-        connected.update(least_congestion_edges)
-        seen_undirected.update(least_congestion_edges)
-
-        for pair, info in routes[level].items():
-            # 如果 routes 裡的狀態變成了 CONNECTED (1)
-            if info.get("status") == STATUS_CONNECTED:
-                # 就更新 edge_routes 對應的項目
-                edge_routes[level][pair]["status"] = STATUS_CONNECTED
-
-    print(f"step 2加入的邊(共有{len(seen_undirected)}個): {seen_undirected}")
-
-    return network
 
 def main():
 
@@ -784,9 +731,7 @@ def main():
     placed, grid = solve(num)
     routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
     #print_result(placed, routes, edge_routes, node_layer)
-    #visualize_network(network)
 
-    # network = test_bandwidth(num, placed)
     visualize_network(network)
 
 if __name__ == "__main__":
