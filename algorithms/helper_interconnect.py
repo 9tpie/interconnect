@@ -19,6 +19,23 @@ Edge = Tuple[int, int]
 
 STATUS_UNCONNECTED = 0
 STATUS_CONNECTED = 1
+STATUS_XY_CONNECTED = 2
+STATUS_YX_CONNECTED = 3
+
+
+def status_from_path_type(path_type: str) -> int:
+    """把路徑類型轉成 status。
+    - 'XY' -> STATUS_XY_CONNECTED
+    - 'YX' -> STATUS_YX_CONNECTED
+    - 其他 -> STATUS_CONNECTED (保底)
+    """
+    t = (path_type or "").upper()
+    if t == "XY":
+        return STATUS_XY_CONNECTED
+    if t == "YX":
+        return STATUS_YX_CONNECTED
+    return STATUS_CONNECTED
+
 
 # ==========================================
 # [New] Bandwidth to Color Mapping
@@ -240,7 +257,7 @@ def add_missing_edge(
                     undirected=True
                 )
                 added_all.extend(newly_added)
-            info["status"] = STATUS_CONNECTED
+            info["status"] = STATUS_XY_CONNECTED if has_xy_contact else STATUS_YX_CONNECTED
 
     return added_all
 
@@ -277,7 +294,7 @@ def add_last_level_routes_to_network(
         )
         if added:
             all_added_edges.extend(added)
-            info["status"] = STATUS_CONNECTED
+            info["status"] = status_from_path_type(use)
 
     return all_added_edges
 
@@ -331,7 +348,7 @@ def least_congestion_per_level(
             added_all.extend(added)
 
         occupied_edges.update(edges)
-        info["status"] = STATUS_CONNECTED
+        info["status"] = STATUS_XY_CONNECTED
 
     # === Step 2: 同 Parent 局部擁塞檢查 ===
     from collections import defaultdict
@@ -349,7 +366,7 @@ def least_congestion_per_level(
         for c in children:
             info = routes[level][(p, c)]
             status = info.get("status")
-            if status == STATUS_CONNECTED:
+            if status in (STATUS_CONNECTED, STATUS_XY_CONNECTED, STATUS_YX_CONNECTED):
                 path_nodes = info.get("XY", [])
                 current_edges = nodes_to_edges_set(path_nodes)
                 local_occupied.update(current_edges)
@@ -366,11 +383,14 @@ def least_congestion_per_level(
             cost_yx = len(edges_yx.intersection(local_occupied))
 
             selected_edges = set()
+            selected_status = None
 
             if cost_xy == 0 and cost_yx > 0:
                 selected_edges = edges_xy
+                selected_status = STATUS_XY_CONNECTED
             elif cost_yx == 0 and cost_xy > 0:
                 selected_edges = edges_yx
+                selected_status = STATUS_YX_CONNECTED
             else:
                 continue
 
@@ -387,7 +407,7 @@ def least_congestion_per_level(
                 seen_undirected.update(added)
                 added_all.extend(added)
 
-            info["status"] = STATUS_CONNECTED
+            info["status"] = selected_status if selected_status is not None else STATUS_CONNECTED
             local_occupied.update(selected_edges)
             occupied_edges.update(selected_edges)
 
@@ -451,13 +471,13 @@ def solve_multiple_solution(
             yx_edges = info.get('YX_edges', [])
 
             if xy_edges and is_path_connected(xy_edges, seen_undirected):
-                info['status'] = 1
+                info['status'] = STATUS_XY_CONNECTED
                 for u, v in xy_edges:
                     update_link_bandwidth(u, v, bandwidth)
                 continue
 
             if yx_edges and is_path_connected(yx_edges, seen_undirected):
-                info['status'] = 1
+                info['status'] = STATUS_YX_CONNECTED
                 for u, v in yx_edges:
                     update_link_bandwidth(u, v, bandwidth)
                 continue
@@ -483,7 +503,7 @@ def solve_multiple_solution(
                 if is_new_edge:
                     added_all.append((u, v))
 
-            info['status'] = 1
+            info['status'] = STATUS_XY_CONNECTED
 
     return added_all
 
@@ -525,6 +545,25 @@ def solve_interconnect(num, placed):
 
     edge_routes = build_edge_dict_by_level(routes)
 
+    def sync_routes_to_edges(routes_dict, edge_routes_dict):
+        """把 routes 的 status 同步到 edge_routes (保持兩邊一致)"""
+        for lvl, pair_dict in routes_dict.items():
+            if lvl not in edge_routes_dict:
+                continue
+            for pair, info in pair_dict.items():
+                if pair in edge_routes_dict[lvl]:
+                    edge_routes_dict[lvl][pair]["status"] = info.get("status", STATUS_UNCONNECTED)
+
+    def sync_edges_to_routes(routes_dict, edge_routes_dict):
+        """把 edge_routes 的 status 回寫到 routes (step3/4 會直接改 edge_routes)"""
+        for lvl, pair_dict in edge_routes_dict.items():
+            if lvl not in routes_dict:
+                continue
+            for pair, info in pair_dict.items():
+                if pair in routes_dict[lvl]:
+                    routes_dict[lvl][pair]["status"] = info.get("status", STATUS_UNCONNECTED)
+
+
     k = int(math.log2(num))
     W = 2 ** ((k + 1) // 2)
     H = 2 ** (k // 2)
@@ -538,6 +577,7 @@ def solve_interconnect(num, placed):
     connected: Set[Edge] = set()
 
     # step 1: 加入最後一層 (bandwidth=2)
+
     last_edges = add_last_level_routes_to_network(
         network=network,
         routes=routes,
@@ -549,12 +589,10 @@ def solve_interconnect(num, placed):
     connected.update(last_edges)
     seen_undirected.update(last_edges)
 
-    last_level = max(routes.keys())
-    for pair, info in routes[last_level].items():
-        if info["status"] == STATUS_CONNECTED:
-            edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
+    sync_routes_to_edges(routes, edge_routes)
 
     # step 2
+
     for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         # bandwidth 動態計算: 4, 8, 12...
         current_bw = float(4*(i+1))
@@ -570,11 +608,11 @@ def solve_interconnect(num, placed):
         connected.update(least_congestion_edges)
         seen_undirected.update(least_congestion_edges)
 
-        for pair, info in routes[level].items():
-            if info.get("status") == STATUS_CONNECTED:
-                edge_routes[level][pair]["status"] = STATUS_CONNECTED
+    sync_routes_to_edges(routes, edge_routes)
+
 
     # step 3
+
     for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         current_bw = float(4*(i+1))
 
@@ -588,11 +626,12 @@ def solve_interconnect(num, placed):
         connected.update(added_edges)
         seen_undirected.update(added_edges)
 
-        for pair, info in routes[last_level].items():
-            if info["status"] == STATUS_CONNECTED:
-                edge_routes[last_level][pair]["status"] = STATUS_CONNECTED
+    sync_edges_to_routes(routes, edge_routes)
+    sync_routes_to_edges(routes, edge_routes)
+
 
     # step 4
+
     for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         current_bw = float(4*(i+1))
 
@@ -604,12 +643,18 @@ def solve_interconnect(num, placed):
             seen_undirected=connected
         )
 
+
+
+    sync_edges_to_routes(routes, edge_routes)
+    sync_routes_to_edges(routes, edge_routes)
+
     return routes, edge_routes, node_layer, network
 
 def main():
     num = 16
     placed, grid = solve(num)
     routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
+    print_result(placed, routes, edge_routes, node_layer)
     visualize_network(network)
 
 if __name__ == "__main__":
