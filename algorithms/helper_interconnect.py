@@ -507,28 +507,115 @@ def solve_multiple_solution(
 
     return added_all
 
-def print_result(placed, routes, edge_routes, node_layer_func):
+def print_result(*args, **kwargs):
+    """
+    容錯版列印：
+    - 允許少傳/多傳參數：print_(placed) / print_(placed, routes) / print_(placed, routes, edge_routes) ...
+    - routes 或 edge_routes 缺失時，仍會列印 placement；有什麼印什麼
+    - node_layer_func 可省略：會嘗試用 log2 推估（假設樹狀編號：1=root，2/3...）
+    - 也支援用關鍵字傳入：print_(placed=..., routes=..., edge_routes=..., node_layer_func=...)
+    """
+
+    # ----------------------------
+    # 1) 先從 kwargs 拿，再用 args 補
+    # ----------------------------
+    placed = kwargs.get("placed", None)
+    routes = kwargs.get("routes", None)
+    edge_routes = kwargs.get("edge_routes", None)
+    node_layer_func = kwargs.get("node_layer_func", None)
+
+    # 依序用 args 填補缺的（多的忽略）
+    # 允許傳入格式： (placed, routes, edge_routes, node_layer_func)
+    arg_list = list(args)
+    if placed is None and len(arg_list) >= 1:
+        placed = arg_list[0]
+    if routes is None and len(arg_list) >= 2:
+        routes = arg_list[1]
+    if edge_routes is None and len(arg_list) >= 3:
+        edge_routes = arg_list[2]
+    if node_layer_func is None and len(arg_list) >= 4:
+        node_layer_func = arg_list[3]
+
+    # ----------------------------
+    # 2) 預設 node_layer_func：用 log2 推估層級
+    # ----------------------------
+    if node_layer_func is None:
+        import math
+
+        def node_layer_func(nid: int) -> int:
+            # nid=1 -> layer 0, nid=2~3 -> layer 1, nid=4~7 -> layer 2 ...
+            if nid <= 0:
+                return 0
+            return int(math.floor(math.log2(nid)))
+
+    # ----------------------------
+    # 3) 防呆：placed 不存在就直接結束
+    # ----------------------------
+    if not placed:
+        print("\n\n[print_] placed is missing/empty; nothing to print.")
+        return
+
+    # ----------------------------
+    # 4) Placement
+    # ----------------------------
     print("\n\n")
     print("=== Placement Result (1 ~ n layers, leaf included) ===\n")
     for nid in sorted(placed.keys()):
         n = placed[nid]
         layer = node_layer_func(nid)
-        print(f"node{nid:>3}  layer={layer}  at ({n.x},{n.y})  router_id={n.router_id}")
+        # n 可能不是你預期的型別，保護一下
+        x = getattr(n, "x", None)
+        y = getattr(n, "y", None)
+        rid = getattr(n, "router_id", None)
+        print(f"node{nid:>3}  layer={layer}  at ({x},{y})  router_id={rid}")
 
-    print("\n\n")
-    print("=== Router Path Result (1 ~ n layers, leaf included) ===")
-    for level in sorted(routes.keys()):
-        print(f"\nlevel {level} -> {level + 1}")
-        for (p, c), rec in routes[level].items():
-            print(f"({p},{c})  XY={rec['XY']}  YX={rec['YX']}  status={rec['status']}")
+    # ----------------------------
+    # 5) Routes（有才印）
+    # ----------------------------
+    if routes:
+        print("\n\n")
+        print("=== Router Path Result (1 ~ n layers, leaf included) ===")
+        for level in sorted(routes.keys()):
+            print(f"\nlevel {level} -> {level + 1}")
+            level_dict = routes[level]
+            # 允許 level_dict 不是 dict 的情況
+            if not isinstance(level_dict, dict):
+                print(f"[warn] routes[{level}] is not a dict: {type(level_dict)}")
+                continue
 
-    print("\n\n")
-    print("=== Router Edge Result (1 ~ n layers, leaf included) ===")
-    for level in sorted(edge_routes.keys()):
-        print(f"\nlevel {level} -> {level + 1}")
-        for (p, c), info in edge_routes[level].items():
-            status = info.get('status', 'N/A')
-            print(f"({p},{c})  XY edges: {info['XY_edges']}  YX edges: {info['YX_edges']}  status={status}")
+            for (p, c), rec in level_dict.items():
+                # rec 可能缺欄位，給預設
+                xy = rec.get("XY", None) if isinstance(rec, dict) else None
+                yx = rec.get("YX", None) if isinstance(rec, dict) else None
+                status = rec.get("status", None) if isinstance(rec, dict) else None
+                print(f"({p},{c})  XY={xy}  YX={yx}  status={status}")
+    else:
+        print("\n\n[print_] routes is missing; skip Router Path Result.")
+
+    # ----------------------------
+    # 6) Edge routes（有才印）
+    # ----------------------------
+    if edge_routes:
+        print("\n\n")
+        print("=== Router Edge Result (1 ~ n layers, leaf included) ===")
+        for level in sorted(edge_routes.keys()):
+            print(f"\nlevel {level} -> {level + 1}")
+            level_dict = edge_routes[level]
+            if not isinstance(level_dict, dict):
+                print(f"[warn] edge_routes[{level}] is not a dict: {type(level_dict)}")
+                continue
+
+            for (p, c), info in level_dict.items():
+                if isinstance(info, dict):
+                    status = info.get("status", "N/A")
+                    xy_edges = info.get("XY_edges", None)
+                    yx_edges = info.get("YX_edges", None)
+                else:
+                    status, xy_edges, yx_edges = "N/A", None, None
+                print(f"({p},{c})  XY edges: {xy_edges}  YX edges: {yx_edges}  status={status}")
+    else:
+        print("\n\n[print_] edge_routes is missing; skip Router Edge Result.")
+
 
 def solve_interconnect(num, placed):
 
