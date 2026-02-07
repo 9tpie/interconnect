@@ -2,7 +2,7 @@ from __future__ import annotations
 import math
 from typing import List, Tuple
 
-from algorithms import solve, solve_interconnect, print_result
+from algorithms import solve, solve_interconnect, print_result, assign_router
 
 STATUS_XY_CONNECTED = 2
 STATUS_YX_CONNECTED = 3
@@ -201,4 +201,13 @@ if __name__ == "__main__":
         chiplet_id=0,
         verbose=True
     )
+
+    router_map = assign_router(num)
+    core_to_router = {core: rid for rid, core in router_map.items()}
+
+    bits = int(math.log2(16))
+    for core in range(16):
+        addr = format(core, f"0{bits}b")
+        router = f"router{core_to_router[core]}" if core in core_to_router else "(no router)"
+        print(f"core{core:2d} | {addr} | {router}")
 

@@ -44,11 +44,10 @@ def assign_router(num_cores):
                 used_cores.add(core)
                 router_id += 1
 
-                # 16 cores → 只需要 15 個 router
-                if router_id > num_cores - 1:
-                    return router_map
+    # 分配最後一個 core 的 router：router_id = core_id + 1 = num_cores
+    last_core = num_cores - 1
+    router_map[last_core + 1] = last_core
 
-                
 
     return router_map
 
