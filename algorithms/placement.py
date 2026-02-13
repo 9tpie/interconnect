@@ -81,7 +81,7 @@ def solve(num: int):
     placed[1] = place_node_at(grid, 1, router_id=1, core_id=-1, xy=root_xy)
 
     # -------------------------
-    # Part A: 放 blocks 節點 (1..7)
+    # Part 1: 放 blocks 節點 (1..7)
     # -------------------------
     block_node_ids = sorted(blocks.keys())
     orderA = [nid for nid in block_node_ids if nid != 1]
@@ -112,7 +112,7 @@ def solve(num: int):
         raise RuntimeError("blocks 節點放置失敗（1..7）")
 
     # -------------------------
-    # Part B: 放 leaf（在每個 2×2 block 內找 cell）
+    # Part 2: 放 leaf（在每個 2×2 block 內找 cell）
     # leaf node id: 2*pid, 2*pid+1（對應 8..15）
     # -------------------------
     leaf_parents = [nid for nid, b in blocks.items() if b.area <= 4]  # 2x2 leaf blocks :contentReference[oaicite:5]{index=5}
@@ -165,7 +165,41 @@ def solve(num: int):
 
         return False
 
+
+
     if not dfs_leaf(0):
         raise RuntimeError("leaf 放置失敗（在 2×2 block 內找 dist[-1] 位置）")
 
+    # -------------------------
+    # Part 3: 放最後一個router
+    #
+    # -------------------------
+    empty_cells = []
+    for x in range(grid.width):
+        for y in range(grid.height):
+            if not grid.is_used(x, y):
+                empty_cells.append((x, y))
+
+    if len(empty_cells) != 1:
+        raise RuntimeError(f"預期只剩 1 個空位，但找到 {len(empty_cells)} 個：{empty_cells}")
+
+    last_xy = empty_cells[0]
+    last_router_id = num  # num=16 -> router16
+    placed[last_router_id] = place_node_at(
+        grid,
+        node_id=last_router_id,  # 這裡用 16 當 key，剛好也對齊 router_id
+        router_id=last_router_id,
+        core_id=-1,  # 之後 solve_interconnect 會用 assign_router 把 core_id 補上
+        xy=last_xy
+    )
+
     return placed, grid
+
+def main():
+    num = 16
+    placed, grid = solve(num)
+    print(placed)
+    visualize_grid(grid)
+
+if __name__ == '__main__':
+    main()
