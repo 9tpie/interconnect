@@ -115,6 +115,24 @@ def block_of_node(num: int, node_id: int, leaf_area: int = 4) -> Block:
         raise ValueError(f"node_id={node_id} 不存在（可能超過停止探索的深度）")
     return blocks[node_id]
 
+def split_block_follow_parent(b: Block, axis: str, parent_xy: tuple[int, int]) -> tuple[Block, Block]:
+    """
+    回傳 (block_for_small_child, block_for_big_child)
+
+    規則：小的子節點(2i) 要拿「包含 parent_xy」的那一半。
+    """
+    px, py = parent_xy
+
+    c1, c2 = split_block(b, axis)  # 先用原本規則切成兩半
+
+    def inside(bb: Block) -> bool:
+        return (bb.x0 <= px <= bb.x1) and (bb.y0 <= py <= bb.y1)
+
+    # 若 parent 不在 c1，而是在 c2，就交換，讓 c1 變成「包含 parent」的那半
+    if inside(c2) and not inside(c1):
+        return c2, c1
+    return c1, c2
+
 
 if __name__ == "__main__":
     num = int(input("輸入 num (2 的次方，例如 16/32): "))

@@ -200,7 +200,7 @@ def check_nearby(placed_dict, full_paths):
     return directions
 
 if __name__ == "__main__":
-    num = 8
+    num = 64
 
     # assign router
     router_map = assign_router(num)

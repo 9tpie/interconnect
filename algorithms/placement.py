@@ -65,26 +65,79 @@ def candidates_for_node(
 
 
 def solve(num: int):
-    grid, blocks = build_area_partition(num, leaf_area=4)  # 2x2 停止 :contentReference[oaicite:2]{index=2}
-    n_layers, dists = inter_layer_distances(num)           # 16 -> [2,2,1] :contentReference[oaicite:3]{index=3}
+    # ------------------------------------------------------------
+    # 動態 blocks：子節點的 block 由「父節點座標」決定哪一半給 2i
+    # ------------------------------------------------------------
+    # 只在 solve 內做 local import，避免你要改動檔案其他地方的 import
+    from algorithms.area_partition import Grid, grid_shape, split_block
+
+    if num < 4 or (num & (num - 1)) != 0:
+        raise ValueError("num must be power of two and >= 4 (e.g., 16, 32, ...)")
+
+    # 建 grid
+    W, H = grid_shape(num)
+    grid = Grid(W, H)
+
+    # 距離規則
+    n_layers, dists = inter_layer_distances(num)
     d_last = dists[-1]
 
     placed: Dict[int, Node] = {}
+    blocks: Dict[int, Block] = {}
 
-    # 固定 root（你原本固定方式）
-    root_block = blocks[1]
+    # start_axis：沿用你原本 area_partition 的慣例（W>H 先切 x，否則先切 y）
+    start_axis = "x" if W > H else "y"
+
+    def other_axis(axis: str) -> str:
+        return "y" if axis == "x" else "x"
+
+    def axis_for_node(nid: int) -> str:
+        """nid 這一層用哪個 axis 來切它的 block（交錯 x/y）"""
+        lyr = node_layer(nid)  # root=1
+        return start_axis if (lyr % 2 == 1) else other_axis(start_axis)
+
+    def split_block_follow_parent(b: Block, axis: str, parent_xy: Tuple[int, int]) -> Tuple[Block, Block]:
+        """
+        回傳 (block_for_small_child, block_for_big_child)
+        規則：小的子節點(2i) 一定拿「包含 parent_xy」的那一半。
+        """
+        px, py = parent_xy
+        c1, c2 = split_block(b, axis)  # 原本規則：c1=左/上, c2=右/下（依 split_block 實作）
+
+        def inside(bb: Block) -> bool:
+            return (bb.x0 <= px <= bb.x1) and (bb.y0 <= py <= bb.y1)
+
+        # 若 parent 在 c2，就交換，讓小孩拿到包含 parent 的那半
+        if inside(c2) and not inside(c1):
+            return c2, c1
+        return c1, c2
+
+    # ------------------------------------------------------------
+    # 1) 初始化 root block + 固定 root 位置
+    # ------------------------------------------------------------
+    blocks[1] = Block(0, W - 1, 0, H - 1)
+
     fixed_x = 1
     top_y = grid.height - 1
     root_xy = (fixed_x, top_y)
-    if not in_block(root_block, fixed_x, top_y):
+    if not in_block(blocks[1], fixed_x, top_y):
         raise RuntimeError("node1 固定點不在 block1 內")
     placed[1] = place_node_at(grid, 1, router_id=1, core_id=-1, xy=root_xy)
 
-    # -------------------------
-    # Part 1: 放 blocks 節點 (1..7)
-    # -------------------------
-    block_node_ids = sorted(blocks.keys())
-    orderA = [nid for nid in block_node_ids if nid != 1]
+    # root 放好 → 立刻切出 blocks[2], blocks[3]（依 root 座標決定 2i 在哪半）
+    b2, b3 = split_block_follow_parent(blocks[1], axis_for_node(1), (placed[1].x, placed[1].y))
+    blocks[2] = b2
+    blocks[3] = b3
+
+    # ------------------------------------------------------------
+    # 2) Part 1：放 internal nodes（2 .. num//2 - 1）
+    #    並在放好每個 nid 後，動態切出它的 children blocks
+    # ------------------------------------------------------------
+    internal_end = (num // 2) - 1
+    orderA = list(range(2, internal_end + 1))
+
+    # leaf parents 範圍：num//4 .. num//2 - 1（例如 num=16 -> 4..7）
+    leaf_parent_start = num // 4
 
     def dfs_blocks(idx: int) -> bool:
         if idx == len(orderA):
@@ -94,29 +147,48 @@ def solve(num: int):
         pid = parent_id(nid)
         if pid not in placed:
             return False
+        if nid not in blocks:
+            # 正常不應該發生：pid 放好時就會把孩子 blocks 切出來
+            return False
+
         parent_xy = (placed[pid].x, placed[pid].y)
 
         lyr = node_layer(nid)
-        target_dist = dists[lyr - 2]  # layer2 用 dists[0] ... :contentReference[oaicite:4]{index=4}
+        target_dist = dists[lyr - 2]  # layer2 用 dists[0] ...
 
         cands = candidates_for_node(grid, blocks, nid, parent_xy, target_dist)
         for xy in cands:
             placed[nid] = place_node_at(grid, nid, router_id=nid, core_id=-1, xy=xy)
+
+            # 若 nid 還沒到 leaf_parent（代表還需要切出下一層的 blocks）
+            created_children = False
+            if nid < leaf_parent_start:
+                axis = axis_for_node(nid)
+                small_b, big_b = split_block_follow_parent(blocks[nid], axis, (placed[nid].x, placed[nid].y))
+                blocks[nid * 2] = small_b
+                blocks[nid * 2 + 1] = big_b
+                created_children = True
+
             if dfs_blocks(idx + 1):
                 return True
+
+            # 回朔
             remove_node_at(grid, xy)
             del placed[nid]
+            if created_children:
+                blocks.pop(nid * 2, None)
+                blocks.pop(nid * 2 + 1, None)
+
         return False
 
     if not dfs_blocks(0):
-        raise RuntimeError("blocks 節點放置失敗（1..7）")
+        raise RuntimeError("blocks 節點放置失敗（internal nodes）")
 
-    # -------------------------
-    # Part 2: 放 leaf（在每個 2×2 block 內找 cell）
-    # leaf node id: 2*pid, 2*pid+1（對應 8..15）
-    # -------------------------
-    leaf_parents = [nid for nid, b in blocks.items() if b.area <= 4]  # 2x2 leaf blocks :contentReference[oaicite:5]{index=5}
-    leaf_parents = sorted(leaf_parents)
+    # ------------------------------------------------------------
+    # 3) Part 2：放 leaf（沿用你原本作法）
+    #    leaf parents 就是 num//4 .. num//2 - 1
+    # ------------------------------------------------------------
+    leaf_parents = list(range(num // 4, num // 2))
 
     def leaf_candidates_in_parent_block(parent_id_: int) -> List[Tuple[int, int]]:
         """在 parent 的 2×2 block 中找距離 parent 座標 = d_last 的空格"""
@@ -137,16 +209,14 @@ def solve(num: int):
             return True
 
         pid = leaf_parents[parent_idx]
-        # 兩個 leaf id（例如 pid=4 -> 8,9）
         c1, c2 = pid * 2, pid * 2 + 1
 
         cands = leaf_candidates_in_parent_block(pid)
-        # 我們需要挑兩個不同 cell
         for i in range(len(cands)):
             xy1 = cands[i]
             placed[c1] = place_node_at(grid, c1, router_id=c1, core_id=-1, xy=xy1)
 
-            cands2 = leaf_candidates_in_parent_block(pid)  # 更新後再抓一次
+            cands2 = leaf_candidates_in_parent_block(pid)
             for xy2 in cands2:
                 if xy2 == xy1:
                     continue
@@ -155,17 +225,13 @@ def solve(num: int):
                 if dfs_leaf(parent_idx + 1):
                     return True
 
-                # 回朔 leaf2
                 remove_node_at(grid, xy2)
                 del placed[c2]
 
-            # 回朔 leaf1
             remove_node_at(grid, xy1)
             del placed[c1]
 
         return False
-
-
 
     if not dfs_leaf(0):
         raise RuntimeError("leaf 放置失敗（在 2×2 block 內找 dist[-1] 位置）")
