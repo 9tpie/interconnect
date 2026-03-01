@@ -1,8 +1,10 @@
 from __future__ import annotations
 import math
 from typing import List, Tuple
+from visualize import visualize_grid, visualize_network
 
 from algorithms import solve, solve_interconnect, print_result, assign_router
+from visualize import visualize_grid
 
 STATUS_XY_CONNECTED = 2
 STATUS_YX_CONNECTED = 3
@@ -70,6 +72,8 @@ def dataflow_to_router_path(path_nodes, routes, chiplet_id=0, verbose=True):
     path_nodes: 例如 [1,2,4,8,0]
     routes: Router Path Result 的 dict
     chiplet_id: 最後那個 chiplet node（通常你用 0）
+
+
     """
     if not path_nodes or len(path_nodes) < 2:
         return []
@@ -87,17 +91,23 @@ def dataflow_to_router_path(path_nodes, routes, chiplet_id=0, verbose=True):
 
         lvl, rec = find_route_record(routes, p, c)
         mode, seg = pick_segment_by_status(rec)
-
+        """
         if verbose:
             if rec is None:
                 print(f"[warn] missing route record for ({p},{c}); skip")
             else:
                 print(f"level {lvl} || node {p} -> node {c} || choose {mode} || path={seg}")
 
+        """
+
         if seg:
             segments.append(seg)
-
+    # step 1: 完成path(based on topology)
     full_router_path = concat_paths(segments)
+
+    # step 2: 根據chiplet_id傳轉換成chiplet_router，並把chiplet_router concat到full_router_path
+    chiplet_router = core_to_router.get(chiplet_id, None)
+    full_router_path.append(chiplet_router)
 
     if verbose:
         print(f"\nFull router path: {full_router_path}")
@@ -134,88 +144,63 @@ def leaf_of_chiplet(num: int, chiplet_id: int) -> int:
     leaf_start = num // 2               # leaf 起點，例如 num=16 => 8
     return leaf_start + (chiplet_id // 2)
 
-def chiplets_of_leaf(num: int, leaf: int) -> Tuple[int, int]:
-    """leaf -> 這個 leaf 對應的兩個 chiplet"""
-    if not _is_power_of_two(num):
-        raise ValueError("num 必須是 2 的冪")
-    leaf_start = num // 2
-    leaf_end = num - 1
-    if not (leaf_start <= leaf <= leaf_end):
-        raise ValueError(f"leaf 必須在 {leaf_start}..{leaf_end}")
-    base = 2 * (leaf - leaf_start)
-    return base, base + 1
 
 def path_root_to_chiplet(num: int, chiplet_id: int) -> List[int]:
     """回傳你圖上的形式：root -> ... -> leaf -> chiplet"""
     leaf = leaf_of_chiplet(num, chiplet_id)
     return root_to_node_path(leaf) + [chiplet_id]
 
-def chiplets_in_subtree(num: int, tree_node: int) -> List[int]:
+
+def check_nearby(placed_dict, full_paths):
+
     """
-    給任一 tree node（1..num-1），回傳它的子樹底下包含哪些 chiplet（依序）
+    傳入兩個dict，分別是位置以及路徑
+
     """
-    if not _is_power_of_two(num):
-        raise ValueError("num 必須是 2 的冪")
-    if not (1 <= tree_node <= num - 1):
-        raise ValueError(f"tree_node 必須在 1..{num-1}")
-
-    k = _tree_height_k(num)          # num = 2^k
-    leaf_level = k - 1               # leaf 在第 k-1 層（root=0 層）
-
-    # 算 tree_node 的層級 d（root=0）
-    d = int(math.floor(math.log2(tree_node)))
-
-    # 子樹最左 leaf：一路走左子到 leaf_level
-    shift = leaf_level - d           # 還要往下幾層
-    left_leaf = tree_node << shift
-    right_leaf = left_leaf + (1 << shift) - 1
-
-    leaf_start = num // 2
-    # leaf -> chiplet 區間
-    left_chiplet = 2 * (left_leaf - leaf_start)
-    right_chiplet = 2 * (right_leaf - leaf_start) + 1
-    return list(range(left_chiplet, right_chiplet + 1))
-
-def check_nearby(placed_dict, leaf_router, chiplet_router):
-
     def find_node_by_router_id(placed_dict, rid: int):
         for n in placed_dict.values():
             if getattr(n, "router_id", None) == rid:
                 return n
         return None
 
-    leaf_node = find_node_by_router_id(placed_dict, leaf_router)
-    chiplet_node = find_node_by_router_id(placed_dict, chiplet_router)
+    directions = {}
+    for c_id, path in full_paths.items():
+        if path[-1] == path[-2]:
+            directions[c_id]="pass"
 
-    if leaf_node is None:
-        return "LEAF_ROUTER_NOT_IN_PLACED"
-    if chiplet_node is None:
-        return "CHIPLET_ROUTER_NOT_IN_PLACED"
-
-    dx = chiplet_node.x - leaf_node.x
-    dy = chiplet_node.y - leaf_node.y
-    manhattan = abs(dx) + abs(dy)
-
-    if manhattan == 1:
-        if dx == 1 and dy == 0:
-            direction = "(E)"
-        elif dx == -1 and dy == 0:
-            direction = "(W)"
-        elif dx == 0 and dy == 1:
-            direction = "(N)"
-        elif dx == 0 and dy == -1:
-            direction = "(S)"
         else:
-            direction = "（相鄰但方向判定異常）"
-        #print(f"[OK] leaf_router 與 chiplet_router 東西南北相鄰：距離=1，方向={direction}")
-    else:
-        #print(f"[NO] leaf_router 與 chiplet_router 非東西南北相鄰：Manhattan distance = {manhattan}")
-        direction = "Not nearby"
+            leaf_node = find_node_by_router_id(placed_dict, path[-2])
+            chiplet_node = find_node_by_router_id(placed_dict, path[-1])
 
-    return direction
+            if leaf_node is None:
+                return "LEAF_ROUTER_NOT_IN_PLACED"
+            if chiplet_node is None:
+                return "CHIPLET_ROUTER_NOT_IN_PLACED"
+
+            dx = chiplet_node.x - leaf_node.x
+            dy = chiplet_node.y - leaf_node.y
+            manhattan = abs(dx) + abs(dy)
+
+            if manhattan == 1:
+                if dx == 1 and dy == 0:
+                    directions[c_id] = "(E)"
+                elif dx == -1 and dy == 0:
+                    directions[c_id] = "(W)"
+                elif dx == 0 and dy == 1:
+                    directions[c_id] = "(N)"
+                elif dx == 0 and dy == -1:
+                    directions[c_id] = "(S)"
+                else:
+                    directions[c_id] = "（相鄰但方向判定異常）"
+                #print(f"[OK] leaf_router 與 chiplet_router 東西南北相鄰：距離=1，方向={direction}")
+            else:
+                #print(f"[NO] leaf_router 與 chiplet_router 非東西南北相鄰：Manhattan distance = {manhattan}")
+                directions[c_id] = "Not nearby"
+
+    return directions
 
 if __name__ == "__main__":
-    num = 16
+    num = 8
 
     # assign router
     router_map = assign_router(num)
@@ -228,32 +213,38 @@ if __name__ == "__main__":
     routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
 
     print_result(placed=placed, routes=routes, edge_routes=None, node_layer_func=node_layer)
-    print("\n\n")
-    print("\n=== Check all chiplet_id ===")
-    results = []
 
-    for cid in range(num):
-        test_tree_path = path_root_to_chiplet(num, cid)
+    # dataflow
+    print("=== Dataflow in binary tree (the last one is chiplet node) ===")
+    for c_id in range(num):
+        test_tree_path = path_root_to_chiplet(num,c_id)
+        print(f"path list: {test_tree_path}")
 
+    print("\n")
+
+    print("=== Transform to router path (based on topology) ===")
+    full_paths = {}
+    for c_id in range(num):
+        test_tree_path = path_root_to_chiplet(num, c_id)
         full_router_path = dataflow_to_router_path(
             path_nodes=test_tree_path,
             routes=routes,  # 你的 Router Path Result dict
-            chiplet_id=cid,
+            chiplet_id=c_id,
             verbose=False
         )
+        full_paths[c_id] = full_router_path
+    for c_id, path in full_paths.items():
+        print(f"chiplet node {c_id}: {path}")
 
-        leaf_router = full_router_path[-2]
-        chiplet_core = full_router_path[-1]
+    # check direction
+    print("\n")
+    print("\n=== Check all chiplet_id ===")
+    direction = check_nearby(placed, full_paths)
+    for c_id, direction in direction.items():
+        print(f"chiplet node {c_id}: {direction}")
 
-        chiplet_router_id = core_to_router.get(chiplet_core, None)
 
-        if chiplet_router_id is None:
-            direction = "NO_ROUTER"
-        else:
-            # 5) 檢查是否相鄰
-            direction = check_nearby(placed, leaf_router, chiplet_router_id)
 
-        results.append((cid, leaf_router, chiplet_router_id, direction))
+    visualize_network(network)
 
-    directions = [d for (_cid, _leaf_r, _chip_r, d) in results]
-    print("\nAll directions:", directions)
+

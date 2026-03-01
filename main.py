@@ -4,7 +4,7 @@ from algorithms import assign_router
 from visualize import visualize_grid, visualize_network
 
 def main():
-    num = 32
+    num = 8
 
     # placement
     placed, grid = solve(num)
@@ -15,7 +15,7 @@ def main():
     # result
     print_result(placed, routes, edge_routes, node_layer)
     visualize_network(network)
-
+    visualize_grid(grid)
     
 
 if __name__ == "__main__":
