@@ -67,7 +67,7 @@ def concat_paths(paths):
     return full
 
 
-def dataflow_to_router_path(path_nodes, routes, chiplet_id=0, verbose=True):
+def dataflow_to_router_path(num, path_nodes, routes, chiplet_id=0, verbose=False):
     """
     path_nodes: 例如 [1,2,4,8,0]
     routes: Router Path Result 的 dict
@@ -106,6 +106,8 @@ def dataflow_to_router_path(path_nodes, routes, chiplet_id=0, verbose=True):
     full_router_path = concat_paths(segments)
 
     # step 2: 根據chiplet_id傳轉換成chiplet_router，並把chiplet_router concat到full_router_path
+    router_map = assign_router(num)
+    core_to_router = {core: rid for rid, core in router_map.items()}
     chiplet_router = core_to_router.get(chiplet_id, None)
     full_router_path.append(chiplet_router)
 
@@ -150,12 +152,11 @@ def path_root_to_chiplet(num: int, chiplet_id: int) -> List[int]:
     leaf = leaf_of_chiplet(num, chiplet_id)
     return root_to_node_path(leaf) + [chiplet_id]
 
-
 def check_nearby(placed_dict, full_paths):
 
     """
     傳入兩個dict，分別是位置以及路徑
-
+    回傳dict
     """
     def find_node_by_router_id(placed_dict, rid: int):
         for n in placed_dict.values():
@@ -200,11 +201,10 @@ def check_nearby(placed_dict, full_paths):
     return directions
 
 if __name__ == "__main__":
-    num = 64
+    num = 16
 
     # assign router
-    router_map = assign_router(num)
-    core_to_router = {core: rid for rid, core in router_map.items()}
+    # router_map = assign_router(num)
 
     # placement
     placed, grid = solve(num)
@@ -215,14 +215,6 @@ if __name__ == "__main__":
     print_result(placed=placed, routes=routes, edge_routes=None, node_layer_func=node_layer)
 
     # dataflow
-    print("=== Dataflow in binary tree (the last one is chiplet node) ===")
-    for c_id in range(num):
-        test_tree_path = path_root_to_chiplet(num,c_id)
-        print(f"path list: {test_tree_path}")
-
-    print("\n")
-
-    print("=== Transform to router path (based on topology) ===")
     full_paths = {}
     for c_id in range(num):
         test_tree_path = path_root_to_chiplet(num, c_id)
@@ -233,9 +225,17 @@ if __name__ == "__main__":
             verbose=False
         )
         full_paths[c_id] = full_router_path
+    print("=== Dataflow in binary tree (the last one is chiplet node) ===")
+    for c_id in range(num):
+        test_tree_path = path_root_to_chiplet(num, c_id)
+        print(f"path list: {test_tree_path}")
+
+    print("\n")
+
+    print("=== Transform to router path (based on topology) ===")
+
     for c_id, path in full_paths.items():
         print(f"chiplet node {c_id}: {path}")
-
     # check direction
     print("\n")
     print("\n=== Check all chiplet_id ===")

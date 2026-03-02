@@ -5,5 +5,7 @@ from .routing_algorithms import xy_route_by_coord
 from .routing_algorithms import yx_route_by_coord
 from .helper_interconnect import solve_interconnect
 from .helper_interconnect import print_result
+from .dataflow import check_nearby, path_root_to_chiplet, dataflow_to_router_path
 
-__all__ = ["solve", "node_layer", "assign_router", "xy_route_by_coord", "yx_route_by_coord", "solve_interconnect", "print_result"]
+__all__ = ["solve", "node_layer", "assign_router", "xy_route_by_coord", "yx_route_by_coord", "solve_interconnect", "print_result",
+           "check_nearby", "path_root_to_chiplet", "dataflow_to_router_path"]
