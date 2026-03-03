@@ -220,6 +220,28 @@ def stage1_opt(full_paths):
 
     return new_paths
 
+def stage2_opt(full_paths):
+    new_paths = {}
+
+    for c_id, path in full_paths.items():
+        stack = []
+        pos = {}  # node -> index in stack
+
+        for v in path:
+            if v not in pos:
+                pos[v] = len(stack)
+                stack.append(v)
+            else:
+                idx = pos[v]
+                while len(stack) > idx + 1:
+                    removed = stack.pop()
+                    pos.pop(removed, None)
+
+        new_paths[c_id] = stack
+
+    return new_paths
+
+
 if __name__ == "__main__":
     num = 16
 
@@ -264,6 +286,13 @@ if __name__ == "__main__":
 
     stage1_result = stage1_opt(full_paths)
     for c_id, path in stage1_result.items():
+        print(f"chiplet node {c_id}: {path}")
+
+    print("\n")
+    print("=== Stage 2 OPTIMIZATION ===")
+
+    stage2_result = stage2_opt(stage1_result)
+    for c_id, path in stage2_result.items():
         print(f"chiplet node {c_id}: {path}")
 
     """
