@@ -200,6 +200,26 @@ def check_nearby(placed_dict, full_paths):
 
     return directions
 
+def stage1_opt(full_paths):
+    new_paths = {}
+
+    for c_id, path in full_paths.items():
+        p = list(path)  # copy，不改到原本 full_paths 裡的 list
+
+        if not p:
+            new_paths[c_id] = p
+            continue
+
+        target = p[-1]
+        for i in range(len(p) - 1):
+            if p[i] == target:
+                p = p[: i + 1]   # 或 del p[i+1:] 也行（但這行更直觀）
+                break
+
+        new_paths[c_id] = p
+
+    return new_paths
+
 if __name__ == "__main__":
     num = 16
 
@@ -219,6 +239,7 @@ if __name__ == "__main__":
     for c_id in range(num):
         test_tree_path = path_root_to_chiplet(num, c_id)
         full_router_path = dataflow_to_router_path(
+            num = num,
             path_nodes=test_tree_path,
             routes=routes,  # 你的 Router Path Result dict
             chiplet_id=c_id,
@@ -236,14 +257,23 @@ if __name__ == "__main__":
 
     for c_id, path in full_paths.items():
         print(f"chiplet node {c_id}: {path}")
+
+    print("\n")
+
+    print("=== Stage 1 OPTIMIZATION ===")
+
+    stage1_result = stage1_opt(full_paths)
+    for c_id, path in stage1_result.items():
+        print(f"chiplet node {c_id}: {path}")
+
+    """
     # check direction
     print("\n")
     print("\n=== Check all chiplet_id ===")
     direction = check_nearby(placed, full_paths)
     for c_id, direction in direction.items():
         print(f"chiplet node {c_id}: {direction}")
-
-
+    """
 
     visualize_network(network)
 
