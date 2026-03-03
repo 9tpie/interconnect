@@ -1,7 +1,8 @@
 from __future__ import annotations
 import math
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from visualize import visualize_grid, visualize_network
+from collections import Counter
 
 from algorithms import solve, solve_interconnect, print_result, assign_router
 from visualize import visualize_grid
@@ -241,6 +242,40 @@ def stage2_opt(full_paths):
 
     return new_paths
 
+def calculate_interconnect(full_paths):
+    """
+        full_paths: {chiplet_id: [r0, r1, r2, ...]}
+        輸出每個 step idx i -> idx i+1 的 (u->v) 次數統計
+        """
+    # 找所有 path 的最長長度
+    max_len = 0
+    for p in full_paths.values():
+        if p:
+            max_len = max(max_len, len(p))
+
+    # step i 代表 idx i -> idx i+1，所以最多到 max_len-2
+    step_counters: List[Counter[Tuple[int, int]]] = [Counter() for _ in range(max_len - 1)]
+
+    for cid, path in full_paths.items():
+        if not path or len(path) < 2:
+            continue
+        for i in range(len(path) - 1):
+            u, v = path[i], path[i + 1]
+            step_counters[i][(u, v)] += 1
+
+    # 印出結果
+    for i, counter in enumerate(step_counters):
+        if not counter:
+            continue
+        print(f"idx{i}~idx{i + 1}")
+        # 依次數由大到小，次數相同則依 u,v 排序（讓輸出穩定）
+        items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+        for (u, v), cnt in items:
+            print(f"  {u} --> {v}  {cnt}個")
+        print()
+
+    return step_counters
+
 
 if __name__ == "__main__":
     num = 16
@@ -295,6 +330,8 @@ if __name__ == "__main__":
     for c_id, path in stage2_result.items():
         print(f"chiplet node {c_id}: {path}")
 
+    calculate_interconnect(full_paths)
+    calculate_interconnect(stage2_result)
     """
     # check direction
     print("\n")
