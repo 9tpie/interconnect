@@ -3,7 +3,7 @@ import math
 from typing import List, Tuple, Dict
 from visualize import visualize_grid, visualize_network
 from collections import Counter
-
+from data_structure import Network
 from algorithms import solve, solve_interconnect, print_result, assign_router
 from visualize import visualize_grid
 
@@ -242,43 +242,78 @@ def stage2_opt(full_paths):
 
     return new_paths
 
-def calculate_interconnect(full_paths):
+def calculate_interconnect(num_of_core, paths):
     """
         full_paths: {chiplet_id: [r0, r1, r2, ...]}
-        輸出每個 step idx i -> idx i+1 的 (u->v) 次數統計
-        """
-    # 找所有 path 的最長長度
-    max_len = 0
-    for p in full_paths.values():
-        if p:
-            max_len = max(max_len, len(p))
+        1.輸出每個 cycle 的 (u->v) 次數統計
+        2.計算所有cycle的每條連線的頻寬
+    """
+
+    total_cycle = 1
+    n = int(math.log2(num_of_core))
+
+    for i in range(1, n):
+        t = n - i + 1
+        exp = (t - 1) // 2  # 次方部分取整數
+        d = 2 ** exp
+
+        total_cycle += d
 
     # step i 代表 idx i -> idx i+1，所以最多到 max_len-2
-    step_counters: List[Counter[Tuple[int, int]]] = [Counter() for _ in range(max_len - 1)]
+    step_counters: List[Counter[Tuple[int, int]]] = [Counter() for _ in range(total_cycle)]
 
-    for cid, path in full_paths.items():
+    total_counter = Counter()
+    for cid, path in paths.items():
         if not path or len(path) < 2:
             continue
         for i in range(len(path) - 1):
-            u, v = path[i], path[i + 1]
+            # u, v = path[i], path[i + 1]
+            u = min(path[i], path[i + 1])
+            v = max(path[i], path[i + 1])
             step_counters[i][(u, v)] += 1
 
+    pair_max_counter = Counter()
+    for counter in step_counters:
+        for pair, cnt in counter.items():
+            pair_max_counter[pair] = max(pair_max_counter[pair], cnt)
+
     # 印出結果
+    """
     for i, counter in enumerate(step_counters):
         if not counter:
             continue
-        print(f"idx{i}~idx{i + 1}")
+        print(f"cycle{i}")
         # 依次數由大到小，次數相同則依 u,v 排序（讓輸出穩定）
         items = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
         for (u, v), cnt in items:
             print(f"  {u} --> {v}  {cnt}個")
         print()
+    """
 
-    return step_counters
+
+    items = sorted(pair_max_counter.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
+
+
+    result = []
+    for (u, v), cnt in pair_max_counter.items():
+        result.append({
+            "u": u,
+            "v": v,
+            "cnt": cnt
+        })
+
+    return result
+
+
 
 
 if __name__ == "__main__":
     num = 16
+
+    k = int(math.log2(num))
+    W = 2 ** ((k + 1) // 2)
+    H = 2 ** (k // 2)
+    stage1_opt_network = Network(W, H)
 
     # assign router
     # router_map = assign_router(num)
@@ -330,8 +365,10 @@ if __name__ == "__main__":
     for c_id, path in stage2_result.items():
         print(f"chiplet node {c_id}: {path}")
 
-    calculate_interconnect(full_paths)
-    calculate_interconnect(stage2_result)
+    stage1_opt_result = calculate_interconnect(num, stage1_result)
+    # calculate_interconnect(num, stage2_result)
+    print(stage1_opt_result)
+
     """
     # check direction
     print("\n")
