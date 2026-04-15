@@ -10,6 +10,14 @@ from visualize import visualize_grid
 STATUS_XY_CONNECTED = 2
 STATUS_YX_CONNECTED = 3
 
+def build_router_to_node(placed: Dict[int, "Node"]) -> Dict[int, "Node"]:
+    router_to_node: Dict[int, "Node"] = {}
+    for n in placed.values():
+        rid = getattr(n, "router_id", None)
+        if rid is not None and rid >= 0:
+            router_to_node[rid] = n
+    return router_to_node
+
 def find_route_record(routes, p, c):
     """
     在 routes 的所有 level 中找 (p,c) 的紀錄
@@ -293,17 +301,19 @@ def calculate_interconnect(num_of_core, paths):
 
     items = sorted(pair_max_counter.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
 
-
-    result = []
+    result = {}
     for (u, v), cnt in pair_max_counter.items():
-        result.append({
-            "u": u,
-            "v": v,
-            "cnt": cnt
-        })
+        result[(u, v)] = cnt
 
     return result
 
+
+
+def create_opt_network(opt_result, opt_net, router_to_node):
+    for (u, v), cnt in opt_result.items():
+        node_u = router_to_node.get(u)
+        node_v = router_to_node.get(v)
+        opt_net.add_link(node_u, node_v, cnt, color='black')
 
 
 
@@ -321,8 +331,13 @@ if __name__ == "__main__":
     # placement
     placed, grid = solve(num)
 
+    router_to_node = build_router_to_node(placed)
+
+    for node in placed.values():
+        stage1_opt_network.add_existing_node(node)
+
     # interconnect
-    routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
+    routes, edge_routes, node_layer, network, connected = solve_interconnect(num, placed)
 
     print_result(placed=placed, routes=routes, edge_routes=None, node_layer_func=node_layer)
 
@@ -367,7 +382,10 @@ if __name__ == "__main__":
 
     stage1_opt_result = calculate_interconnect(num, stage1_result)
     # calculate_interconnect(num, stage2_result)
-    print(stage1_opt_result)
+    for (u, v), cnt in stage1_opt_result.items():
+        print(f"node {u} --- node {v}:  {stage1_opt_result[(u, v)]} bandwidth")
+
+    create_opt_network(stage1_opt_result, stage1_opt_network, router_to_node)
 
     """
     # check direction
@@ -379,5 +397,6 @@ if __name__ == "__main__":
     """
 
     visualize_network(network)
+    visualize_network(stage1_opt_network)
 
 

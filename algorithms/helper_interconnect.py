@@ -616,6 +616,50 @@ def print_result(*args, **kwargs):
     else:
         print("\n\n[print_] edge_routes is missing; skip Router Edge Result.")
 
+def leaf_router_to_chiplet(
+        num: int,
+        connected: Set[Edge],
+        net: "Network",
+        router_to_node:Dict[int, "Node"],
+        bandwidth: float = 1.0
+):
+
+    added_leaf: List[Tuple[int, int]] = []
+    temp_edge = []
+
+    # step 1: 找出leaf router底下的兩個chiplet node
+    for i, j in enumerate(range(int(num / 2), num)):
+        print(f"leaf router {j}: chiplet {2*i}, {2*i+1}")
+        temp_edge.append((j, 2*i))
+        temp_edge.append((j, 2*i+1))
+
+    # step 2: 把 (leaf router, chiplet node) --> (leaf router, chiplet router)
+    leaf_edge = []
+    router_map = assign_router(num)
+    core_to_router = {core: rid for rid, core in router_map.items()}
+    for pair in temp_edge:
+        chiplet_id = pair[1]
+        chiplet_router = core_to_router.get(chiplet_id, None)
+        leaf_edge.append((pair[0], chiplet_router))
+
+    print(leaf_edge)
+
+    # step 3: 若leaf router != chiplet router，且不在connected內，則連線，頻寬為1
+    for pair in leaf_edge:
+        u, v = pair
+        edge = tuple(sorted((u, v)))
+
+        if u!=v:
+            print(pair)
+
+        if u != v and edge not in connected:
+            node_u = router_to_node[u]
+            node_v = router_to_node[v]
+            added_leaf.append(edge)
+            net.add_link(node_u, node_v, bandwidth)
+
+    return added_leaf
+
 
 def solve_interconnect(num, placed):
 
@@ -664,6 +708,19 @@ def solve_interconnect(num, placed):
     connected: Set[Edge] = set()
 
     # step 1: 加入最後一層 (bandwidth=2)
+
+    added_leaf = leaf_router_to_chiplet(
+        num=num,
+        connected=connected,
+        net=network,
+        router_to_node=router_to_node,
+        bandwidth=1.0
+    )
+    connected.update(added_leaf)
+    seen_undirected.update(added_leaf)
+
+    sync_edges_to_routes(routes, edge_routes)
+    sync_routes_to_edges(routes, edge_routes)
 
     last_edges = add_last_level_routes_to_network(
         network=network,
@@ -722,27 +779,31 @@ def solve_interconnect(num, placed):
     for i, level in enumerate(range(len(routes) - 1, 0, -1)):
         current_bw = float(4*(i+1))
 
-        solve_multiple_solution(
+        added_remain = solve_multiple_solution(
             net=network,
             routes_at_level=edge_routes[level],
             router_to_node=router_to_node,
             bandwidth=current_bw,
             seen_undirected=connected
         )
-
-
+        connected.update(added_remain)
+        seen_undirected.update(added_remain)
 
     sync_edges_to_routes(routes, edge_routes)
     sync_routes_to_edges(routes, edge_routes)
 
-    return routes, edge_routes, node_layer, network
+
+
+    return routes, edge_routes, node_layer, network, connected
 
 def main():
     num = 16
     placed, grid = solve(num)
-    routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
+    routes, edge_routes, node_layer, network, connected = solve_interconnect(num, placed)
     print_result(placed, routes, edge_routes, node_layer)
+    print(connected)
     visualize_network(network)
+
 
 if __name__ == "__main__":
     main()
