@@ -4,7 +4,7 @@ from algorithms import assign_router
 from visualize import visualize_grid, visualize_network, visualize_router_placement
 
 def main():
-    num = 16
+    num =64
 
     # assign router
     router_map = assign_router(num)
@@ -14,7 +14,7 @@ def main():
     core_to_router = {core: rid for rid, core in router_map.items()}
 
     # interconnect
-    routes, edge_routes, node_layer, network = solve_interconnect(num, placed)
+    routes, edge_routes, node_layer, network, connected = solve_interconnect(num, placed)
 
     # result
     print_result(placed, routes, edge_routes, node_layer)
@@ -43,7 +43,7 @@ def main():
     for c_id, path in full_paths.items():
         print(f"chiplet node {c_id}: {path}")
 
-    # visualize_network(network)
+    visualize_network(network)
     visualize_grid(grid)
     # visualize_router_placement(grid, placed)
 

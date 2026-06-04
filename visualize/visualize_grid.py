@@ -49,6 +49,9 @@ def visualize_grid(grid: Grid, show_values: bool = True):
     plt.ylabel("Y")
     plt.show()
 
+    save_path = "C:\\Users\\yctea\\Desktop\\interconnect_topology"
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
 def visualize_router_placement(
     grid: Grid,
     placed: dict[int, "Node"],
